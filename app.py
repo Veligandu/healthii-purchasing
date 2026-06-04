@@ -600,31 +600,41 @@ with tab3:
             lambda x: str(int(float(x))) if pd.notna(x) else ""
         )
 
+        # Nach Hersteller sortieren
+        df_hist = df_hist.sort_values("Hersteller").reset_index(drop=True)
+
         hist_cols = [
-            "eingelagert", "Pzn", "Artikelname", "Hersteller",
+            "eingelagert", "Hersteller", "Pzn", "Artikelname",
             "Bestellmenge", "Lagerbestand", "Verkaeufe L30", "Verkaeufe L90",
         ]
         hist_cols = [c for c in hist_cols if c in df_hist.columns]
 
         n_offen = (df_hist["eingelagert"].astype(str).str.strip().str.lower() == "nein").sum()
-        st.caption(f"{n_offen} von {len(df_hist)} Positionen noch nicht eingelagert")
+
+        col_info, col_alle = st.columns([3, 1])
+        col_info.caption(f"{n_offen} von {len(df_hist)} Positionen noch nicht eingelagert")
+
+        with col_alle:
+            if st.button("✅ Alle einlagern", use_container_width=True):
+                df_hist["eingelagert"] = "ja"
+                if letzte_excel:
+                    df_hist.to_excel(letzte_excel, index=False, sheet_name="Abfrageergebnis")
+                st.success("✓ Alle Positionen auf 'ja' gesetzt")
+                st.rerun()
 
         edited_hist = st.data_editor(
             df_hist[hist_cols],
             column_config={
-                "eingelagert": st.column_config.SelectboxColumn(
-                    "Eingelagert",
-                    options=["nein", "ja"],
-                    required=True,
-                    width="small",
+                "eingelagert":  st.column_config.SelectboxColumn(
+                    "Eingelagert", options=["nein", "ja"], required=True, width="small",
                 ),
-                "Pzn":         st.column_config.TextColumn("PZN",        disabled=True, width="small"),
-                "Artikelname": st.column_config.TextColumn("Artikelname", disabled=True, width="large"),
-                "Hersteller":  st.column_config.TextColumn("Hersteller",  disabled=True),
-                "Bestellmenge":st.column_config.NumberColumn("Bestellmenge", disabled=True),
-                "Lagerbestand":st.column_config.NumberColumn("Lagerbestand", disabled=True),
-                "Verkaeufe L30":st.column_config.NumberColumn("L30",         disabled=True),
-                "Verkaeufe L90":st.column_config.NumberColumn("L90",         disabled=True),
+                "Hersteller":   st.column_config.TextColumn("Hersteller",   disabled=True),
+                "Pzn":          st.column_config.TextColumn("PZN",          disabled=True, width="small"),
+                "Artikelname":  st.column_config.TextColumn("Artikelname",  disabled=True, width="large"),
+                "Bestellmenge": st.column_config.NumberColumn("Bestellmenge", disabled=True),
+                "Lagerbestand": st.column_config.NumberColumn("Lagerbestand", disabled=True),
+                "Verkaeufe L30":st.column_config.NumberColumn("L30",          disabled=True),
+                "Verkaeufe L90":st.column_config.NumberColumn("L90",          disabled=True),
             },
             use_container_width=True,
             hide_index=True,
@@ -633,7 +643,8 @@ with tab3:
 
         if st.button("💾 Änderungen speichern", type="primary"):
             df_hist[hist_cols] = edited_hist
-            df_hist.to_excel(letzte_excel, index=False, sheet_name="Abfrageergebnis")
+            if letzte_excel:
+                df_hist.to_excel(letzte_excel, index=False, sheet_name="Abfrageergebnis")
             st.success("✓ Bestellhistorie aktualisiert")
             st.rerun()
 
