@@ -292,6 +292,50 @@ if not st.session_state.drive_verbunden:
     st.session_state.drive = drive
     st.session_state.drive_verbunden = True
 
+    # Beim Start: wiederbestellung_aktuell.xlsx aus Drive laden falls vorhanden
+    if drive and not st.session_state.get("excel_bytes_input"):
+        try:
+            stammdaten_id = get_stammdaten_folder_id(drive)
+            wb_bytes = download_csv_from_drive(drive, "wiederbestellung_aktuell.xlsx", stammdaten_id)
+            if wb_bytes is not None:
+                # download_csv_from_drive gibt DataFrame zurück — wir brauchen Bytes
+                pass  # Wird unten separat behandelt
+        except Exception:
+            pass
+
+        try:
+            from googleapiclient.http import MediaIoBaseDownload
+            query = f"name='wiederbestellung_aktuell.xlsx' and trashed=false"
+            results = drive.files().list(q=query, fields="files(id)", pageSize=1).execute()
+            files = results.get("files", [])
+            if files:
+                buf = io.BytesIO()
+                dl  = MediaIoBaseDownload(buf, drive.files().get_media(fileId=files[0]["id"]))
+                done = False
+                while not done:
+                    _, done = dl.next_chunk()
+                excel_bytes = buf.getvalue()
+
+                letzte_excel         = finde_letzte_bestellung_excel()
+                letzte_bestellung_df = lade_letzte_bestellung(letzte_excel)
+                mbw_ausnahmen = {}
+                try:
+                    stammdaten_id = get_stammdaten_folder_id(drive)
+                    mbw_df = download_csv_from_drive(drive, "mbw_exceptions.csv", stammdaten_id)
+                    if mbw_df is not None:
+                        mbw_ausnahmen = dict(zip(mbw_df["Hersteller"], mbw_df["MBW"]))
+                except Exception:
+                    pass
+
+                ergebnis = berechne_bestellvorschlag(excel_bytes, letzte_bestellung_df, mbw_ausnahmen)
+                st.session_state.ergebnis          = ergebnis
+                st.session_state.excel_bytes_input = excel_bytes
+                st.session_state.uploaded_filename = "wiederbestellung_aktuell.xlsx"
+                if not ergebnis["bestellen"].empty:
+                    st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
+        except Exception:
+            pass
+
 # ─── Header ───────────────────────────────────────────────────────────────────
 
 heute = date.today()
@@ -346,14 +390,25 @@ with st.sidebar:
         # Nur berechnen wenn eine NEUE Datei hochgeladen wurde
         if st.session_state.get("uploaded_filename") != uploaded.name:
             excel_bytes = uploaded.read()
-            with st.spinner("Berechne Bestellvorschlag …"):
+            with st.spinner("Lade hoch & berechne …"):
+                # Sofort in Drive speichern
+                if st.session_state.drive:
+                    try:
+                        stammdaten_id = get_stammdaten_folder_id(st.session_state.drive)
+                        upload_bytes_to_drive(
+                            st.session_state.drive, excel_bytes,
+                            "wiederbestellung_aktuell.xlsx", stammdaten_id,
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        )
+                    except Exception:
+                        pass
+
                 letzte_excel         = finde_letzte_bestellung_excel()
                 letzte_bestellung_df = lade_letzte_bestellung(letzte_excel)
                 mbw_ausnahmen = {}
                 if st.session_state.drive:
                     try:
-                        stammdaten_id = get_stammdaten_folder_id(st.session_state.drive)
-                        mbw_df        = download_csv_from_drive(
+                        mbw_df = download_csv_from_drive(
                             st.session_state.drive, "mbw_exceptions.csv", stammdaten_id
                         )
                         if mbw_df is not None:
@@ -368,7 +423,7 @@ with st.sidebar:
                     st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
                 else:
                     st.session_state.df_bestellen_edit = pd.DataFrame()
-            st.success(f"✓ {uploaded.name}")
+            st.success(f"✓ {uploaded.name} (in Drive gespeichert)")
         else:
             st.success(f"✓ {uploaded.name}")
 
