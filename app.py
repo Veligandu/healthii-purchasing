@@ -332,12 +332,13 @@ if not st.session_state.drive_verbunden:
         with st.spinner("Letzten Stand wird geladen …"):
             _fehler = None
             try:
-                # 1. wiederbestellung_aktuell.xlsx laden
-                _q = "name='wiederbestellung_aktuell.xlsx' and trashed=false"
+                # 1. wiederbestellung_aktuell.xlsx laden (im Stammdaten-Ordner suchen)
+                _stammdaten_id = get_stammdaten_folder_id(drive)
+                _q = f"name='wiederbestellung_aktuell.xlsx' and '{_stammdaten_id}' in parents and trashed=false"
                 _res = drive.files().list(q=_q, fields="files(id,name)", pageSize=1).execute()
                 _files = _res.get("files", [])
                 if not _files:
-                    _fehler = "wiederbestellung_aktuell.xlsx nicht in Drive gefunden."
+                    _fehler = "Noch keine Wiederbestelldatei in Drive — bitte links hochladen."
                 else:
                     _buf = io.BytesIO()
                     _dl = MediaIoBaseDownload(_buf, drive.files().get_media(fileId=_files[0]["id"]))
