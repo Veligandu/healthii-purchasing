@@ -5,6 +5,7 @@ Streamlit Web App
 Starten: streamlit run app.py
 """
 
+import base64
 import io
 import os
 from datetime import date
@@ -107,16 +108,8 @@ def check_password():
     st.markdown("""
     <div style='max-width:420px;margin:80px auto 0;'>
         <div style='text-align:center;margin-bottom:32px;'>
-            <div style='display:inline-flex;align-items:baseline;line-height:1;'>
-                <span style='font-family:"Inter",sans-serif;font-size:30px;font-weight:300;
-                             color:#111827;letter-spacing:-1px;'>health</span>
-                <span style='font-family:"Inter",sans-serif;font-size:30px;font-weight:300;
-                             color:#2DD4A7;letter-spacing:-1px;position:relative;'>ii
-                    <span style='position:absolute;top:-5px;left:1px;font-size:7px;
-                                 letter-spacing:5.5px;color:#2DD4A7;'>••</span>
-                </span>
-            </div>
-            <div style='margin-top:8px;'>
+            {logo_html}
+            <div style='margin-top:10px;'>
                 <span style='background:#F0FDF9;color:#0D9488;font-size:10px;font-weight:600;
                              padding:3px 10px;border-radius:20px;letter-spacing:0.8px;
                              border:1px solid #CCFBF1;'>PURCHASING-AGENT</span>
@@ -309,19 +302,20 @@ year  = heute.year
 drive_status_color = "#0D9488" if st.session_state.drive else "#EF4444"
 drive_status_text  = "Drive verbunden" if st.session_state.drive else "Drive nicht verbunden"
 
+# Logo als Base64 laden
+logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+logo_b64 = ""
+if os.path.exists(logo_path):
+    with open(logo_path, "rb") as f:
+        logo_b64 = base64.b64encode(f.read()).decode()
+logo_html = (f"<img src='data:image/png;base64,{logo_b64}' style='height:36px;' />"
+             if logo_b64 else "<span style='font-size:24px;font-weight:300;'>healthii</span>")
+
 st.markdown(f"""
 <div style='display:flex;align-items:center;justify-content:space-between;
             padding:0 0 20px 0;border-bottom:1px solid #E5E7EB;margin-bottom:24px;'>
     <div style='display:flex;align-items:center;gap:14px;'>
-        <div style='display:flex;align-items:baseline;line-height:1;'>
-            <span style='font-family:"Inter",sans-serif;font-size:26px;font-weight:300;
-                         color:#111827;letter-spacing:-1px;'>health</span>
-            <span style='font-family:"Inter",sans-serif;font-size:26px;font-weight:300;
-                         color:#2DD4A7;letter-spacing:-1px;position:relative;'>ii
-                <span style='position:absolute;top:-5px;left:1px;font-size:6px;
-                             letter-spacing:5px;color:#2DD4A7;'>••</span>
-            </span>
-        </div>
+        {logo_html}
         <span style='background:#F0FDF9;color:#0D9488;font-size:10px;font-weight:600;
                      padding:3px 10px;border-radius:20px;letter-spacing:0.8px;
                      border:1px solid #CCFBF1;'>PURCHASING-AGENT</span>
