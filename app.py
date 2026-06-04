@@ -717,14 +717,12 @@ with tab3:
     if df_hist is None:
         st.info("Noch keine Bestellhistorie vorhanden.")
     else:
-        letzte_excel = finde_letzte_bestellung_excel()  # für lokales Speichern
         st.subheader(f"📄 {hist_name_t3}")
 
         df_hist["Pzn"] = df_hist["Pzn"].apply(
             lambda x: str(int(float(x))) if pd.notna(x) else ""
         )
 
-        # Nach Hersteller sortieren
         df_hist = df_hist.sort_values("Hersteller").reset_index(drop=True)
 
         hist_cols = [
@@ -738,12 +736,43 @@ with tab3:
         col_info, col_alle = st.columns([3, 1])
         col_info.caption(f"{n_offen} von {len(df_hist)} Positionen noch nicht eingelagert")
 
+        def _speichere_historie_drive(df_speichern, name):
+            """Speichert die Bestellhistorie als Excel in Drive (ersetzt bestehende Datei)."""
+            _buf = io.BytesIO()
+            df_speichern.to_excel(_buf, index=False, sheet_name="Abfrageergebnis")
+            _bytes = _buf.getvalue()
+            # Lokal speichern falls möglich
+            letzte_excel = finde_letzte_bestellung_excel()
+            if letzte_excel:
+                with open(letzte_excel, "wb") as _f:
+                    _f.write(_bytes)
+            # Drive: bestehende Datei suchen und überschreiben
+            _drive = st.session_state.drive
+            if _drive:
+                from googleapiclient.http import MediaIoBaseUpload
+                _q = f"name='{name}' and trashed=false"
+                _res = _drive.files().list(q=_q, fields="files(id)", pageSize=1).execute()
+                _existing = _res.get("files", [])
+                _media = MediaIoBaseUpload(
+                    io.BytesIO(_bytes),
+                    mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+                if _existing:
+                    _drive.files().update(fileId=_existing[0]["id"], media_body=_media).execute()
+                else:
+                    # Datei neu anlegen im KW-Ordner
+                    _week_folder_id = get_week_folder_id(_drive, date.today().isocalendar()[1], date.today().year)
+                    _drive.files().create(
+                        body={"name": name, "parents": [_week_folder_id]},
+                        media_body=_media,
+                    ).execute()
+
         with col_alle:
             if st.button("✅ Alle einlagern", use_container_width=True):
                 df_hist["eingelagert"] = "ja"
-                if letzte_excel:
-                    df_hist.to_excel(letzte_excel, index=False, sheet_name="Abfrageergebnis")
-                st.success("✓ Alle Positionen auf 'ja' gesetzt")
+                with st.spinner("Speichere …"):
+                    _speichere_historie_drive(df_hist, hist_name_t3)
+                st.success("✓ Alle Positionen eingelagert & in Drive gespeichert")
                 st.rerun()
 
         edited_hist = st.data_editor(
@@ -767,9 +796,9 @@ with tab3:
 
         if st.button("💾 Änderungen speichern", type="primary"):
             df_hist[hist_cols] = edited_hist
-            if letzte_excel:
-                df_hist.to_excel(letzte_excel, index=False, sheet_name="Abfrageergebnis")
-            st.success("✓ Bestellhistorie aktualisiert")
+            with st.spinner("Speichere …"):
+                _speichere_historie_drive(df_hist, hist_name_t3)
+            st.success("✓ Bestellhistorie in Drive gespeichert")
             st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
