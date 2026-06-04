@@ -104,30 +104,60 @@ def check_password():
     if st.session_state.get("authenticated"):
         return True
 
-    # Login-Seite im Healthii-Stil
+    # Logo laden
+    _logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+    _logo_b64 = ""
+    if os.path.exists(_logo_path):
+        with open(_logo_path, "rb") as _f:
+            _logo_b64 = base64.b64encode(_f.read()).decode()
+
+    # Hintergrund + Card-Styling
     st.markdown("""
-    <div style='max-width:420px;margin:80px auto 0;'>
-        <div style='text-align:center;margin-bottom:32px;'>
-            {logo_html}
-            <div style='margin-top:10px;'>
-                <span style='background:#F0FDF9;color:#0D9488;font-size:10px;font-weight:600;
-                             padding:3px 10px;border-radius:20px;letter-spacing:0.8px;
-                             border:1px solid #CCFBF1;'>PURCHASING-AGENT</span>
-            </div>
-        </div>
-        <div style='background:white;border:1px solid #E5E7EB;border-radius:16px;
-                    padding:32px;box-shadow:0 4px 16px rgba(0,0,0,0.06);'>
-            <h3 style='margin:0 0 6px;color:#111827;font-size:20px;'>Anmelden</h3>
-            <p style='color:#6B7280;font-size:14px;margin:0 0 24px;'>
-                Bitte melde dich an um fortzufahren.
-            </p>
+    <style>
+    [data-testid="stAppViewContainer"] { background: #F3F4F6; }
+    [data-testid="stMain"] { background: #F3F4F6; }
+    [data-testid="stSidebar"] { display: none; }
+    div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="element-container"])
+        > div[data-testid="element-container"] { padding: 0; }
+    </style>
     """, unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns([1, 4, 1])
-    with col2:
+    # Zentrierte Login-Card
+    _, col, _ = st.columns([1, 1.4, 1])
+    with col:
+        st.markdown("<div style='height:60px'></div>", unsafe_allow_html=True)
+
+        # Logo
+        if _logo_b64:
+            st.markdown(
+                f"<div style='text-align:center;margin-bottom:8px;'>"
+                f"<img src='data:image/png;base64,{_logo_b64}' style='height:44px;' />"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        # Badge
+        st.markdown(
+            "<div style='text-align:center;margin-bottom:28px;'>"
+            "<span style='background:#F0FDF9;color:#0D9488;font-size:10px;font-weight:600;"
+            "padding:3px 10px;border-radius:20px;letter-spacing:0.8px;"
+            "border:1px solid #CCFBF1;'>PURCHASING-AGENT</span></div>",
+            unsafe_allow_html=True,
+        )
+
+        # Card-Rahmen öffnen
+        st.markdown(
+            "<div style='background:white;border:1px solid #E5E7EB;border-radius:16px;"
+            "padding:32px;box-shadow:0 4px 16px rgba(0,0,0,0.06);'>"
+            "<h3 style='margin:0 0 4px;color:#111827;font-size:20px;font-weight:600;'>Anmelden</h3>"
+            "<p style='color:#6B7280;font-size:14px;margin:0 0 20px;'>"
+            "Bitte melde dich an um fortzufahren.</p>",
+            unsafe_allow_html=True,
+        )
+
         pw = st.text_input("Passwort", type="password",
                            label_visibility="collapsed",
                            placeholder="Passwort eingeben …")
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         if st.button("Anmelden", use_container_width=True, type="primary"):
             if pw == app_password:
                 st.session_state.authenticated = True
@@ -135,7 +165,8 @@ def check_password():
             else:
                 st.error("Falsches Passwort. Bitte erneut versuchen.")
 
-    st.markdown("</div></div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
     st.stop()
 
 check_password()
