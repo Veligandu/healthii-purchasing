@@ -1,0 +1,457 @@
+"""
+Healthii Purchasing Agent – Leopold
+Streamlit Web App
+
+Starten: streamlit run app.py
+"""
+
+import io
+import os
+from datetime import date
+
+import pandas as pd
+import streamlit as st
+
+from purchasing_agent import (
+    BASE_DIR,
+    DRIVE_ROOT,
+    berechne_bestellvorschlag,
+    erstelle_bestellsheet,
+    finde_letzte_bestellung_excel,
+    get_or_create_folder,
+    get_services,
+    get_stammdaten_folder_id,
+    get_week_folder_id,
+    lade_letzte_bestellung,
+    speichere_bestellhistorie,
+    upload_bytes_to_drive,
+    download_csv_from_drive,
+)
+
+
+def is_cloud() -> bool:
+    """Erkennt ob die App in der Streamlit Cloud läuft."""
+    try:
+        return 'GOOGLE_TOKEN' in st.secrets
+    except Exception:
+        return False
+
+
+def finde_letzte_bestellung(drive=None):
+    """Gibt (pfad_oder_none, df_oder_none) zurück — lokal oder aus Drive."""
+    if is_cloud() and drive:
+        # Drive: neueste bestellhistorie-*.xlsx suchen
+        results = drive.files().list(
+            q="name contains 'bestellhistorie' and trashed=false",
+            fields="files(id, name, modifiedTime)",
+            orderBy="modifiedTime desc",
+            pageSize=1,
+        ).execute()
+        files = results.get('files', [])
+        if not files:
+            return None, None
+        buf = io.BytesIO()
+        from googleapiclient.http import MediaIoBaseDownload
+        downloader = MediaIoBaseDownload(buf, drive.files().get_media(fileId=files[0]['id']))
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        buf.seek(0)
+        df = pd.read_excel(buf)
+        return files[0]['name'], df
+    else:
+        # Lokal
+        pfad = finde_letzte_bestellung_excel()
+        if pfad is None:
+            return None, None
+        return os.path.basename(pfad), pd.read_excel(pfad)
+
+
+def speichere_historie(df_input, df_bestellen, drive=None):
+    """Speichert Bestellhistorie lokal und/oder in Drive."""
+    historie_name, historie_pfad = speichere_bestellhistorie(df_input, df_bestellen)
+    if drive:
+        week_folder_id = get_week_folder_id(drive, date.today().isocalendar()[1], date.today().year)
+        with open(historie_pfad, 'rb') as f:
+            upload_bytes_to_drive(
+                drive, f.read(), historie_name, week_folder_id,
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            )
+    return historie_name, historie_pfad
+
+# ─── Seitenkonfiguration ──────────────────────────────────────────────────────
+
+st.set_page_config(
+    page_title="Healthii Purchasing",
+    page_icon="🛒",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown("""
+<style>
+    [data-testid="stAppViewContainer"] { background: #f4f8f6; }
+    [data-testid="stSidebar"] { background: #ffffff; border-right: 1px solid #e0ebe7; }
+    h1 { color: #1D9E75 !important; }
+    h2, h3 { color: #2c2c2a; }
+    div[data-testid="metric-container"] {
+        background: white;
+        border: 1px solid #e0ebe7;
+        border-radius: 10px;
+        padding: 12px 16px;
+        border-left: 4px solid #1D9E75;
+    }
+    .stTabs [data-baseweb="tab-highlight"] { background-color: #1D9E75; }
+    .stTabs [aria-selected="true"] { color: #1D9E75 !important; font-weight: 600; }
+    .stButton > button[kind="primary"] { background-color: #1D9E75; border: none; }
+    .stButton > button[kind="primary"]:hover { background-color: #17835f; border: none; }
+    .stDownloadButton > button { background-color: #1D9E75; color: white; border: none; }
+    .stDownloadButton > button:hover { background-color: #17835f; }
+    .stAlert { border-radius: 8px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ─── Session State initialisieren ─────────────────────────────────────────────
+
+for key, default in [
+    ("ergebnis", None),
+    ("df_bestellen_edit", None),
+    ("drive", None),
+    ("drive_verbunden", False),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+# ─── Google Drive verbinden (einmalig) ────────────────────────────────────────
+
+@st.cache_resource
+def verbinde_drive():
+    try:
+        _, drive = get_services()
+        return drive
+    except Exception:
+        return None
+
+if not st.session_state.drive_verbunden:
+    drive = verbinde_drive()
+    st.session_state.drive = drive
+    st.session_state.drive_verbunden = True
+
+# ─── Header ───────────────────────────────────────────────────────────────────
+
+heute = date.today()
+kw    = heute.isocalendar()[1]
+year  = heute.year
+
+col_titel, col_info = st.columns([6, 2])
+with col_titel:
+    st.title("🛒 Healthii Purchasing Agent – Leopold")
+with col_info:
+    st.markdown(f"<div style='text-align:right;padding-top:12px;color:#888;font-size:13px;'>"
+                f"📅 {heute.strftime('%d.%m.%Y')} &nbsp;|&nbsp; KW{kw:02d}/{year}</div>",
+                unsafe_allow_html=True)
+    drive_status = "🟢 Drive verbunden" if st.session_state.drive else "🔴 Drive nicht verbunden"
+    st.markdown(f"<div style='text-align:right;color:#888;font-size:12px;'>{drive_status}</div>",
+                unsafe_allow_html=True)
+
+st.divider()
+
+# ─── Sidebar ──────────────────────────────────────────────────────────────────
+
+with st.sidebar:
+    st.header("📂 Wiederbestellung")
+
+    uploaded = st.file_uploader(
+        "wiederbestellung.xlsx hochladen",
+        type=["xlsx"],
+        help="Metabase-Export hierher ziehen oder auswählen",
+    )
+
+    if uploaded:
+        excel_bytes = uploaded.read()
+
+        with st.spinner("Berechne Bestellvorschlag …"):
+            letzte_excel         = finde_letzte_bestellung_excel()
+            letzte_bestellung_df = lade_letzte_bestellung(letzte_excel)
+
+            mbw_ausnahmen = {}
+            if st.session_state.drive:
+                try:
+                    stammdaten_id = get_stammdaten_folder_id(st.session_state.drive)
+                    mbw_df        = download_csv_from_drive(
+                        st.session_state.drive, "mbw_exceptions.csv", stammdaten_id
+                    )
+                    if mbw_df is not None:
+                        mbw_ausnahmen = dict(zip(mbw_df["Hersteller"], mbw_df["MBW"]))
+                except Exception:
+                    pass
+
+            ergebnis = berechne_bestellvorschlag(excel_bytes, letzte_bestellung_df, mbw_ausnahmen)
+            st.session_state.ergebnis         = ergebnis
+            st.session_state.excel_bytes_input = excel_bytes
+            if not ergebnis["bestellen"].empty:
+                st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
+            else:
+                st.session_state.df_bestellen_edit = pd.DataFrame()
+
+        st.success(f"✓ {uploaded.name}")
+
+    st.divider()
+
+    # ── Letzte Bestellung Status ──
+    st.header("📋 Letzte Bestellung")
+    hist_name, df_hist_sidebar = finde_letzte_bestellung(st.session_state.drive)
+    if df_hist_sidebar is not None:
+        n_gesamt = len(df_hist_sidebar)
+        n_offen  = len(df_hist_sidebar[
+            df_hist_sidebar["eingelagert"].astype(str).str.strip().str.lower() == "nein"
+        ])
+        st.caption(f"📄 {hist_name}")
+        c1, c2 = st.columns(2)
+        c1.metric("Offen", n_offen, help="Noch nicht eingelagert")
+        c2.metric("Eingelagert", n_gesamt - n_offen)
+    else:
+        st.info("Keine Bestellhistorie gefunden")
+
+# ─── Kein Upload → Hinweis ────────────────────────────────────────────────────
+
+if st.session_state.ergebnis is None:
+    st.markdown("""
+    <div style='text-align:center;padding:60px 0;color:#aaa;'>
+        <div style='font-size:48px;'>📄</div>
+        <div style='font-size:18px;margin-top:12px;'>
+            Bitte <b>wiederbestellung.xlsx</b> in der Seitenleiste hochladen
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.stop()
+
+# ─── Ergebnis ─────────────────────────────────────────────────────────────────
+
+ergebnis       = st.session_state.ergebnis
+df_bestellen   = st.session_state.df_bestellen_edit
+df_unter_mbw   = ergebnis["unter_mbw"] if ergebnis else pd.DataFrame()
+
+# KPI-Leiste
+c1, c2, c3, c4 = st.columns(4)
+if df_bestellen is not None and not df_bestellen.empty:
+    c1.metric("Gesamtbestellwert",  f"{df_bestellen['Bestellwert'].sum():,.0f} €")
+    c2.metric("Hersteller",         df_bestellen["Hersteller"].nunique())
+    c3.metric("Positionen",         len(df_bestellen))
+if not df_unter_mbw.empty:
+    c4.metric("Unter MBW",
+              f"{df_unter_mbw['Hersteller'].nunique()} Hersteller",
+              delta=f"{len(df_unter_mbw)} Pos.",
+              delta_color="off")
+
+st.divider()
+
+# ─── Tabs ─────────────────────────────────────────────────────────────────────
+
+tab1, tab2, tab3 = st.tabs([
+    "🛒 Bestellvorschläge",
+    "⚠️ Unter MBW – nicht bestellt",
+    "📋 Bestellhistorie",
+])
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 – Bestellvorschläge
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab1:
+    if df_bestellen is None or df_bestellen.empty:
+        st.info("Keine Bestellungen über MBW.")
+    else:
+        with st.expander("🔍 Berechnungslog"):
+            for eintrag in ergebnis["log"]:
+                farbe = "green" if "✓" in eintrag else "red"
+                st.markdown(f"<span style='color:{farbe}'>{eintrag}</span>", unsafe_allow_html=True)
+
+        st.subheader("Bestellmengen anpassen")
+        st.caption("Nur die Spalte **Bestellmenge** ist editierbar. Bestellwert aktualisiert sich automatisch.")
+
+        # Anzeigespalten
+        basis_spalten = [
+            "Hersteller", "Pzn", "Artikelname", "Bestellmenge",
+            "Rechnungs Netto Ek Ve1", "Bestellwert", "Aep",
+            "Lagerbestand", "Verkaeufe L30", "Verkaeufe L90",
+        ]
+        if "Ve2" in df_bestellen.columns and df_bestellen["Ve2"].notna().any():
+            basis_spalten += ["Ve2", "Rechnungs Netto Ek Ve2"]
+
+        df_display = df_bestellen[[c for c in basis_spalten if c in df_bestellen.columns]].copy()
+
+        col_config = {
+            "Hersteller":              st.column_config.TextColumn("Hersteller",        disabled=True),
+            "Pzn":                     st.column_config.TextColumn("PZN",               disabled=True),
+            "Artikelname":             st.column_config.TextColumn("Artikelname",        disabled=True, width="large"),
+            "Bestellmenge":            st.column_config.NumberColumn("Bestellmenge",     min_value=0, step=1),
+            "Rechnungs Netto Ek Ve1":  st.column_config.NumberColumn("EK Ve1 (€)",       format="%.2f", disabled=True),
+            "Bestellwert":             st.column_config.NumberColumn("Bestellwert (€)",  format="%.2f", disabled=True),
+            "Aep":                     st.column_config.NumberColumn("AEP (€)",          format="%.2f", disabled=True),
+            "Lagerbestand":            st.column_config.NumberColumn("Lagerbestand",     disabled=True),
+            "Verkaeufe L30":           st.column_config.NumberColumn("L30",              disabled=True),
+            "Verkaeufe L90":           st.column_config.NumberColumn("L90",              disabled=True),
+            "Ve2":                     st.column_config.NumberColumn("Ve2",              disabled=True),
+            "Rechnungs Netto Ek Ve2":  st.column_config.NumberColumn("EK Ve2 (€)",       format="%.2f", disabled=True),
+        }
+
+        edited = st.data_editor(
+            df_display,
+            column_config=col_config,
+            use_container_width=True,
+            hide_index=True,
+            key="editor_tab1",
+        )
+
+        # Bestellwert nach Mengenänderung neu berechnen
+        edited["Bestellwert"] = edited["Bestellmenge"] * edited["Rechnungs Netto Ek Ve1"]
+        st.session_state.df_bestellen_edit.loc[edited.index, "Bestellmenge"] = edited["Bestellmenge"]
+        st.session_state.df_bestellen_edit.loc[edited.index, "Bestellwert"]  = edited["Bestellwert"]
+
+        st.divider()
+
+        # Excel vorbereiten
+        ergebnis_export = dict(ergebnis)
+        ergebnis_export["bestellen"] = st.session_state.df_bestellen_edit
+        excel_out = erstelle_bestellsheet(ergebnis_export, kw, year)
+
+        col_dl, col_save = st.columns(2)
+
+        with col_dl:
+            if excel_out:
+                st.download_button(
+                    label="📥 Purchase-Order herunterladen",
+                    data=excel_out,
+                    file_name=f"Purchase-Order-KW{kw:02d}-{year}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    type="primary",
+                )
+
+        with col_save:
+            if st.button("💾 Abschließen & in Drive archivieren", use_container_width=True):
+                with st.spinner("Speichere …"):
+                    try:
+                        df_final   = st.session_state.df_bestellen_edit
+                        drive_conn = st.session_state.drive
+
+                        # Bestellhistorie speichern (lokal + Drive)
+                        speichere_historie(ergebnis["df_input"], df_final, drive_conn)
+
+                        # Purchase-Order lokal speichern + Drive
+                        order_name = f"Purchase-Order-KW{kw:02d}-{year}.xlsx"
+                        order_path = os.path.join(BASE_DIR, order_name)
+                        with open(order_path, "wb") as f:
+                            f.write(excel_out)
+                        if drive_conn:
+                            week_folder_id = get_week_folder_id(drive_conn, kw, year)
+                            upload_bytes_to_drive(
+                                drive_conn, excel_out, order_name, week_folder_id,
+                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            )
+                            st.success(f"✓ Lokal & Drive gespeichert: {order_name}")
+                        else:
+                            st.success(f"✓ Lokal gespeichert: {order_name}")
+
+                        # Session zurücksetzen
+                        st.session_state.ergebnis          = None
+                        st.session_state.df_bestellen_edit = None
+                        st.rerun()
+
+                    except Exception as e:
+                        st.error(f"Fehler: {e}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 – Unter MBW
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab2:
+    if df_unter_mbw.empty:
+        st.success("✅ Alle Hersteller erreichen den Mindestbestellwert.")
+    else:
+        gesamt_potential = df_unter_mbw["Bestellwert"].sum()
+        st.warning(
+            f"**{df_unter_mbw['Hersteller'].nunique()} Hersteller** unter MBW – "
+            f"**{len(df_unter_mbw)} Positionen** – "
+            f"potentieller Bestellwert: **{gesamt_potential:,.2f} €**"
+        )
+
+        anzeige_cols = [
+            "Hersteller", "Pzn", "Artikelname", "Bestellmenge",
+            "Rechnungs Netto Ek Ve1", "Bestellwert", "Aep",
+            "MBW", "Fehlbetrag", "Lagerbestand", "Verkaeufe L30", "Verkaeufe L90",
+        ]
+        anzeige_cols = [c for c in anzeige_cols if c in df_unter_mbw.columns]
+
+        st.dataframe(
+            df_unter_mbw[anzeige_cols],
+            column_config={
+                "Pzn":                    st.column_config.TextColumn("PZN"),
+                "Artikelname":            st.column_config.TextColumn("Artikelname", width="large"),
+                "Rechnungs Netto Ek Ve1": st.column_config.NumberColumn("EK Ve1 (€)",      format="%.2f"),
+                "Bestellwert":            st.column_config.NumberColumn("Bestellwert (€)",  format="%.2f"),
+                "Aep":                    st.column_config.NumberColumn("AEP (€)",           format="%.2f"),
+                "MBW":                    st.column_config.NumberColumn("MBW (€)",           format="%.0f"),
+                "Fehlbetrag":             st.column_config.NumberColumn("Fehlbetrag (€)",    format="%.2f"),
+                "Lagerbestand":           st.column_config.NumberColumn("Lagerbestand"),
+                "Verkaeufe L30":          st.column_config.NumberColumn("L30"),
+                "Verkaeufe L90":          st.column_config.NumberColumn("L90"),
+            },
+            use_container_width=True,
+            hide_index=True,
+        )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 – Bestellhistorie
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab3:
+    hist_name_t3, df_hist = finde_letzte_bestellung(st.session_state.drive)
+
+    if df_hist is None:
+        st.info("Noch keine Bestellhistorie vorhanden.")
+    else:
+        letzte_excel = finde_letzte_bestellung_excel()  # für lokales Speichern
+        st.subheader(f"📄 {hist_name_t3}")
+
+        df_hist["Pzn"] = df_hist["Pzn"].apply(
+            lambda x: str(int(float(x))) if pd.notna(x) else ""
+        )
+
+        hist_cols = [
+            "eingelagert", "Pzn", "Artikelname", "Hersteller",
+            "Bestellmenge", "Lagerbestand", "Verkaeufe L30", "Verkaeufe L90",
+        ]
+        hist_cols = [c for c in hist_cols if c in df_hist.columns]
+
+        n_offen = (df_hist["eingelagert"].astype(str).str.strip().str.lower() == "nein").sum()
+        st.caption(f"{n_offen} von {len(df_hist)} Positionen noch nicht eingelagert")
+
+        edited_hist = st.data_editor(
+            df_hist[hist_cols],
+            column_config={
+                "eingelagert": st.column_config.SelectboxColumn(
+                    "Eingelagert",
+                    options=["nein", "ja"],
+                    required=True,
+                    width="small",
+                ),
+                "Pzn":         st.column_config.TextColumn("PZN",        disabled=True, width="small"),
+                "Artikelname": st.column_config.TextColumn("Artikelname", disabled=True, width="large"),
+                "Hersteller":  st.column_config.TextColumn("Hersteller",  disabled=True),
+                "Bestellmenge":st.column_config.NumberColumn("Bestellmenge", disabled=True),
+                "Lagerbestand":st.column_config.NumberColumn("Lagerbestand", disabled=True),
+                "Verkaeufe L30":st.column_config.NumberColumn("L30",         disabled=True),
+                "Verkaeufe L90":st.column_config.NumberColumn("L90",         disabled=True),
+            },
+            use_container_width=True,
+            hide_index=True,
+            key="editor_historie",
+        )
+
+        if st.button("💾 Änderungen speichern", type="primary"):
+            df_hist[hist_cols] = edited_hist
+            df_hist.to_excel(letzte_excel, index=False, sheet_name="Abfrageergebnis")
+            st.success("✓ Bestellhistorie aktualisiert")
+            st.rerun()

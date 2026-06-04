@@ -1,0 +1,17 @@
+# Google Credentials – niemals in Git!
+credentials.json
+token.json
+
+# Lokale Datendateien
+wiederbestellung*.xlsx
+bestellhistorie*.xlsx
+Purchase-Order*.xlsx
+*.csv
+leopold.log
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+~$*
