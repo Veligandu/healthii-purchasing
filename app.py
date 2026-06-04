@@ -347,9 +347,18 @@ if not st.session_state.drive_verbunden:
                         _, _done = _dl.next_chunk()
                     excel_bytes = _buf.getvalue()
 
-                    # 2. Bestellhistorie aus Drive laden (neueste)
+                    # 2. Bestellhistorie aus Drive laden und aufbereiten (wie lade_letzte_bestellung)
                     _, _df_hist = finde_letzte_bestellung(drive)
-                    letzte_bestellung_df = _df_hist  # None ist ok
+                    letzte_bestellung_df = None
+                    if _df_hist is not None:
+                        _df_hist["Pzn"] = _df_hist["Pzn"].astype(str)
+                        _nicht_eingelagert = _df_hist[
+                            _df_hist["eingelagert"].astype(str).str.strip().str.lower() == "nein"
+                        ].copy()
+                        if not _nicht_eingelagert.empty:
+                            letzte_bestellung_df = _nicht_eingelagert[["Pzn", "Bestellmenge"]].rename(
+                                columns={"Bestellmenge": "Bestellmenge_letzte_Woche"}
+                            )
 
                     # 3. MBW-Ausnahmen laden
                     mbw_ausnahmen = {}
