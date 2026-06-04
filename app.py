@@ -325,49 +325,54 @@ if not st.session_state.drive_verbunden:
     st.session_state.drive = drive
     st.session_state.drive_verbunden = True
 
-    # Beim Start: wiederbestellung_aktuell.xlsx aus Drive laden falls vorhanden
+    # Beim Start: letzten Stand aus Drive wiederherstellen
     if drive and not st.session_state.get("excel_bytes_input"):
-        try:
-            stammdaten_id = get_stammdaten_folder_id(drive)
-            wb_bytes = download_csv_from_drive(drive, "wiederbestellung_aktuell.xlsx", stammdaten_id)
-            if wb_bytes is not None:
-                # download_csv_from_drive gibt DataFrame zurück — wir brauchen Bytes
-                pass  # Wird unten separat behandelt
-        except Exception:
-            pass
+        from googleapiclient.http import MediaIoBaseDownload
 
-        try:
-            from googleapiclient.http import MediaIoBaseDownload
-            query = f"name='wiederbestellung_aktuell.xlsx' and trashed=false"
-            results = drive.files().list(q=query, fields="files(id)", pageSize=1).execute()
-            files = results.get("files", [])
-            if files:
-                buf = io.BytesIO()
-                dl  = MediaIoBaseDownload(buf, drive.files().get_media(fileId=files[0]["id"]))
-                done = False
-                while not done:
-                    _, done = dl.next_chunk()
-                excel_bytes = buf.getvalue()
+        with st.spinner("Letzten Stand wird geladen …"):
+            _fehler = None
+            try:
+                # 1. wiederbestellung_aktuell.xlsx laden
+                _q = "name='wiederbestellung_aktuell.xlsx' and trashed=false"
+                _res = drive.files().list(q=_q, fields="files(id,name)", pageSize=1).execute()
+                _files = _res.get("files", [])
+                if not _files:
+                    _fehler = "wiederbestellung_aktuell.xlsx nicht in Drive gefunden."
+                else:
+                    _buf = io.BytesIO()
+                    _dl = MediaIoBaseDownload(_buf, drive.files().get_media(fileId=_files[0]["id"]))
+                    _done = False
+                    while not _done:
+                        _, _done = _dl.next_chunk()
+                    excel_bytes = _buf.getvalue()
 
-                letzte_excel         = finde_letzte_bestellung_excel()
-                letzte_bestellung_df = lade_letzte_bestellung(letzte_excel)
-                mbw_ausnahmen = {}
-                try:
-                    stammdaten_id = get_stammdaten_folder_id(drive)
-                    mbw_df = download_csv_from_drive(drive, "mbw_exceptions.csv", stammdaten_id)
-                    if mbw_df is not None:
-                        mbw_ausnahmen = dict(zip(mbw_df["Hersteller"], mbw_df["MBW"]))
-                except Exception:
-                    pass
+                    # 2. Bestellhistorie aus Drive laden (neueste)
+                    _, _df_hist = finde_letzte_bestellung(drive)
+                    letzte_bestellung_df = _df_hist  # None ist ok
 
-                ergebnis = berechne_bestellvorschlag(excel_bytes, letzte_bestellung_df, mbw_ausnahmen)
-                st.session_state.ergebnis          = ergebnis
-                st.session_state.excel_bytes_input = excel_bytes
-                st.session_state.uploaded_filename = "wiederbestellung_aktuell.xlsx"
-                if not ergebnis["bestellen"].empty:
-                    st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
-        except Exception:
-            pass
+                    # 3. MBW-Ausnahmen laden
+                    mbw_ausnahmen = {}
+                    try:
+                        _stammdaten_id = get_stammdaten_folder_id(drive)
+                        _mbw_df = download_csv_from_drive(drive, "mbw_exceptions.csv", _stammdaten_id)
+                        if _mbw_df is not None:
+                            mbw_ausnahmen = dict(zip(_mbw_df["Hersteller"], _mbw_df["MBW"]))
+                    except Exception:
+                        pass
+
+                    # 4. Bestellvorschlag berechnen
+                    ergebnis = berechne_bestellvorschlag(excel_bytes, letzte_bestellung_df, mbw_ausnahmen)
+                    st.session_state.ergebnis          = ergebnis
+                    st.session_state.excel_bytes_input = excel_bytes
+                    st.session_state.uploaded_filename = "wiederbestellung_aktuell.xlsx"
+                    if not ergebnis["bestellen"].empty:
+                        st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
+
+            except Exception as e:
+                _fehler = str(e)
+
+        if _fehler:
+            st.warning(f"Auto-Load fehlgeschlagen: {_fehler}")
 
 # ─── Header ───────────────────────────────────────────────────────────────────
 
