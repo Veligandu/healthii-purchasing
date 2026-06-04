@@ -343,36 +343,38 @@ with st.sidebar:
     )
 
     if uploaded:
-        excel_bytes = uploaded.read()
+        # Nur berechnen wenn eine NEUE Datei hochgeladen wurde
+        if st.session_state.get("uploaded_filename") != uploaded.name:
+            excel_bytes = uploaded.read()
+            with st.spinner("Berechne Bestellvorschlag …"):
+                letzte_excel         = finde_letzte_bestellung_excel()
+                letzte_bestellung_df = lade_letzte_bestellung(letzte_excel)
+                mbw_ausnahmen = {}
+                if st.session_state.drive:
+                    try:
+                        stammdaten_id = get_stammdaten_folder_id(st.session_state.drive)
+                        mbw_df        = download_csv_from_drive(
+                            st.session_state.drive, "mbw_exceptions.csv", stammdaten_id
+                        )
+                        if mbw_df is not None:
+                            mbw_ausnahmen = dict(zip(mbw_df["Hersteller"], mbw_df["MBW"]))
+                    except Exception:
+                        pass
+                ergebnis = berechne_bestellvorschlag(excel_bytes, letzte_bestellung_df, mbw_ausnahmen)
+                st.session_state.ergebnis          = ergebnis
+                st.session_state.excel_bytes_input = excel_bytes
+                st.session_state.uploaded_filename = uploaded.name
+                if not ergebnis["bestellen"].empty:
+                    st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
+                else:
+                    st.session_state.df_bestellen_edit = pd.DataFrame()
+            st.success(f"✓ {uploaded.name}")
+        else:
+            st.success(f"✓ {uploaded.name}")
 
-        with st.spinner("Berechne Bestellvorschlag …"):
-            letzte_excel         = finde_letzte_bestellung_excel()
-            letzte_bestellung_df = lade_letzte_bestellung(letzte_excel)
-
-            mbw_ausnahmen = {}
-            if st.session_state.drive:
-                try:
-                    stammdaten_id = get_stammdaten_folder_id(st.session_state.drive)
-                    mbw_df        = download_csv_from_drive(
-                        st.session_state.drive, "mbw_exceptions.csv", stammdaten_id
-                    )
-                    if mbw_df is not None:
-                        mbw_ausnahmen = dict(zip(mbw_df["Hersteller"], mbw_df["MBW"]))
-                except Exception:
-                    pass
-
-            ergebnis = berechne_bestellvorschlag(excel_bytes, letzte_bestellung_df, mbw_ausnahmen)
-            st.session_state.ergebnis         = ergebnis
-            st.session_state.excel_bytes_input = excel_bytes
-            if not ergebnis["bestellen"].empty:
-                st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
-            else:
-                st.session_state.df_bestellen_edit = pd.DataFrame()
-
-        st.success(f"✓ {uploaded.name}")
-
-    # Neu berechnen — nur wenn eine Datei bereits geladen ist
-    if st.session_state.get("excel_bytes_input") and not uploaded:
+    # Neu berechnen — immer sichtbar wenn eine Datei geladen ist
+    if st.session_state.get("excel_bytes_input"):
+        st.divider()
         if st.button("🔄 Neu berechnen", use_container_width=True,
                      help="Bestellvorschlag mit aktualisierter Bestellhistorie neu berechnen"):
             with st.spinner("Berechne neu …"):
