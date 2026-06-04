@@ -132,7 +132,7 @@ def check_password():
         return True
 
     # Logo laden
-    _logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+    _logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logo.png")
     _logo_b64 = ""
     if os.path.exists(_logo_path):
         with open(_logo_path, "rb") as _f:
@@ -412,7 +412,7 @@ drive_status_color = "#0D9488" if st.session_state.drive else "#EF4444"
 drive_status_text  = "Drive verbunden" if st.session_state.drive else "Drive nicht verbunden"
 
 # Logo als Base64 laden
-logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logo.png")
 logo_b64 = ""
 if os.path.exists(logo_path):
     with open(logo_path, "rb") as f:

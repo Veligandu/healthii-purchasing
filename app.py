@@ -1,3 +1,7 @@
 import streamlit as st
 
-st.switch_page("pages/1_Purchasing_Agent.py")
+pg = st.navigation([
+    st.Page("pages/1_Purchasing_Agent.py",    title="Purchasing Agent",      icon="🛒"),
+    st.Page("pages/2_GH_Rechnungskontrolle.py", title="GH-Rechnungskontrolle", icon="📄"),
+])
+pg.run()
