@@ -515,7 +515,8 @@ if df_roh is not None and not df_roh.empty:
     with col_dl:
         _buf = io.BytesIO()
         with pd.ExcelWriter(_buf, engine="openpyxl") as _w:
-            df_agg.to_excel(_w, index=False, sheet_name=f"Monat {monat_label}")
+            _sheet = f"Monat {monat_auswahl:02d}-{jahr_auswahl}"
+            df_agg.to_excel(_w, index=False, sheet_name=_sheet)
             df_belege.to_excel(_w, index=False, sheet_name="Belegkontrolle")
         st.download_button(
             label="📥 Excel herunterladen",
