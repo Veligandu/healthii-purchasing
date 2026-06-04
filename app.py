@@ -147,12 +147,12 @@ st.markdown("""
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
     /* Hintergrund */
-    [data-testid="stAppViewContainer"] { background: #F9FAFB; }
-    [data-testid="stMain"] { background: #F9FAFB; }
+    [data-testid="stAppViewContainer"] { background: #FFFFFF; }
+    [data-testid="stMain"] { background: #FFFFFF; }
 
     /* Sidebar */
     [data-testid="stSidebar"] {
-        background: #FFFFFF;
+        background: #F9FAFB;
         border-right: 1px solid #E5E7EB;
     }
     [data-testid="stSidebar"] h1,
