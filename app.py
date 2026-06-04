@@ -371,6 +371,35 @@ with st.sidebar:
 
         st.success(f"✓ {uploaded.name}")
 
+    # Neu berechnen — nur wenn eine Datei bereits geladen ist
+    if st.session_state.get("excel_bytes_input") and not uploaded:
+        if st.button("🔄 Neu berechnen", use_container_width=True,
+                     help="Bestellvorschlag mit aktualisierter Bestellhistorie neu berechnen"):
+            with st.spinner("Berechne neu …"):
+                letzte_excel         = finde_letzte_bestellung_excel()
+                letzte_bestellung_df = lade_letzte_bestellung(letzte_excel)
+                mbw_ausnahmen = {}
+                if st.session_state.drive:
+                    try:
+                        stammdaten_id = get_stammdaten_folder_id(st.session_state.drive)
+                        mbw_df        = download_csv_from_drive(
+                            st.session_state.drive, "mbw_exceptions.csv", stammdaten_id
+                        )
+                        if mbw_df is not None:
+                            mbw_ausnahmen = dict(zip(mbw_df["Hersteller"], mbw_df["MBW"]))
+                    except Exception:
+                        pass
+                ergebnis = berechne_bestellvorschlag(
+                    st.session_state.excel_bytes_input, letzte_bestellung_df, mbw_ausnahmen
+                )
+                st.session_state.ergebnis = ergebnis
+                if not ergebnis["bestellen"].empty:
+                    st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
+                else:
+                    st.session_state.df_bestellen_edit = pd.DataFrame()
+            st.success("✓ Neu berechnet")
+            st.rerun()
+
     st.divider()
 
     # ── Letzte Bestellung Status ──
