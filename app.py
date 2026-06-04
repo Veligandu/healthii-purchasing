@@ -107,10 +107,20 @@ def check_password():
     st.markdown("""
     <div style='max-width:420px;margin:80px auto 0;'>
         <div style='text-align:center;margin-bottom:32px;'>
-            <span style='font-size:28px;font-weight:700;color:#111827;letter-spacing:-0.5px;'>healthii</span>
-            <span style='display:inline-block;margin-left:10px;background:#F0FDF9;color:#0D9488;
-                         font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;
-                         letter-spacing:0.5px;vertical-align:middle;'>PURCHASING</span>
+            <div style='display:inline-flex;align-items:baseline;line-height:1;'>
+                <span style='font-family:"Inter",sans-serif;font-size:30px;font-weight:300;
+                             color:#111827;letter-spacing:-1px;'>health</span>
+                <span style='font-family:"Inter",sans-serif;font-size:30px;font-weight:300;
+                             color:#2DD4A7;letter-spacing:-1px;position:relative;'>ii
+                    <span style='position:absolute;top:-5px;left:1px;font-size:7px;
+                                 letter-spacing:5.5px;color:#2DD4A7;'>••</span>
+                </span>
+            </div>
+            <div style='margin-top:8px;'>
+                <span style='background:#F0FDF9;color:#0D9488;font-size:10px;font-weight:600;
+                             padding:3px 10px;border-radius:20px;letter-spacing:0.8px;
+                             border:1px solid #CCFBF1;'>PURCHASING-AGENT</span>
+            </div>
         </div>
         <div style='background:white;border:1px solid #E5E7EB;border-radius:16px;
                     padding:32px;box-shadow:0 4px 16px rgba(0,0,0,0.06);'>
@@ -302,10 +312,19 @@ drive_status_text  = "Drive verbunden" if st.session_state.drive else "Drive nic
 st.markdown(f"""
 <div style='display:flex;align-items:center;justify-content:space-between;
             padding:0 0 20px 0;border-bottom:1px solid #E5E7EB;margin-bottom:24px;'>
-    <div style='display:flex;align-items:center;gap:12px;'>
-        <span style='font-size:24px;font-weight:700;color:#111827;letter-spacing:-0.5px;'>healthii</span>
-        <span style='background:#F0FDF9;color:#0D9488;font-size:11px;font-weight:600;
-                     padding:3px 10px;border-radius:20px;letter-spacing:0.5px;'>PURCHASING</span>
+    <div style='display:flex;align-items:center;gap:14px;'>
+        <div style='display:flex;align-items:baseline;line-height:1;'>
+            <span style='font-family:"Inter",sans-serif;font-size:26px;font-weight:300;
+                         color:#111827;letter-spacing:-1px;'>health</span>
+            <span style='font-family:"Inter",sans-serif;font-size:26px;font-weight:300;
+                         color:#2DD4A7;letter-spacing:-1px;position:relative;'>ii
+                <span style='position:absolute;top:-5px;left:1px;font-size:6px;
+                             letter-spacing:5px;color:#2DD4A7;'>••</span>
+            </span>
+        </div>
+        <span style='background:#F0FDF9;color:#0D9488;font-size:10px;font-weight:600;
+                     padding:3px 10px;border-radius:20px;letter-spacing:0.8px;
+                     border:1px solid #CCFBF1;'>PURCHASING-AGENT</span>
     </div>
     <div style='display:flex;align-items:center;gap:16px;'>
         <span style='color:#6B7280;font-size:13px;'>
