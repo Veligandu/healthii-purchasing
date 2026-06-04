@@ -97,54 +97,169 @@ def check_password():
     except Exception:
         app_password = None
 
-    # Kein Passwort konfiguriert → freier Zugang (lokal)
     if not app_password:
         return True
 
     if st.session_state.get("authenticated"):
         return True
 
+    # Login-Seite im Healthii-Stil
     st.markdown("""
-    <div style='max-width:400px;margin:80px auto;'>
-        <h2 style='color:#1D9E75;text-align:center;'>🛒 Healthii Purchasing</h2>
-        <p style='color:#888;text-align:center;'>Bitte melde dich an</p>
-    </div>
+    <div style='max-width:420px;margin:80px auto 0;'>
+        <div style='text-align:center;margin-bottom:32px;'>
+            <span style='font-size:28px;font-weight:700;color:#111827;letter-spacing:-0.5px;'>healthii</span>
+            <span style='display:inline-block;margin-left:10px;background:#F0FDF9;color:#0D9488;
+                         font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;
+                         letter-spacing:0.5px;vertical-align:middle;'>PURCHASING</span>
+        </div>
+        <div style='background:white;border:1px solid #E5E7EB;border-radius:16px;
+                    padding:32px;box-shadow:0 4px 16px rgba(0,0,0,0.06);'>
+            <h3 style='margin:0 0 6px;color:#111827;font-size:20px;'>Anmelden</h3>
+            <p style='color:#6B7280;font-size:14px;margin:0 0 24px;'>
+                Bitte melde dich an um fortzufahren.
+            </p>
     """, unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns([1, 2, 1])
+    col1, col2, col3 = st.columns([1, 4, 1])
     with col2:
-        pw = st.text_input("Passwort", type="password", label_visibility="collapsed",
+        pw = st.text_input("Passwort", type="password",
+                           label_visibility="collapsed",
                            placeholder="Passwort eingeben …")
         if st.button("Anmelden", use_container_width=True, type="primary"):
             if pw == app_password:
                 st.session_state.authenticated = True
                 st.rerun()
             else:
-                st.error("Falsches Passwort")
+                st.error("Falsches Passwort. Bitte erneut versuchen.")
+
+    st.markdown("</div></div>", unsafe_allow_html=True)
     st.stop()
 
 check_password()
 
 st.markdown("""
 <style>
-    [data-testid="stAppViewContainer"] { background: #f4f8f6; }
-    [data-testid="stSidebar"] { background: #ffffff; border-right: 1px solid #e0ebe7; }
-    h1 { color: #1D9E75 !important; }
-    h2, h3 { color: #2c2c2a; }
-    div[data-testid="metric-container"] {
-        background: white;
-        border: 1px solid #e0ebe7;
-        border-radius: 10px;
-        padding: 12px 16px;
-        border-left: 4px solid #1D9E75;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+
+    /* Hintergrund */
+    [data-testid="stAppViewContainer"] { background: #F9FAFB; }
+    [data-testid="stMain"] { background: #F9FAFB; }
+
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background: #FFFFFF;
+        border-right: 1px solid #E5E7EB;
     }
-    .stTabs [data-baseweb="tab-highlight"] { background-color: #1D9E75; }
-    .stTabs [aria-selected="true"] { color: #1D9E75 !important; font-weight: 600; }
-    .stButton > button[kind="primary"] { background-color: #1D9E75; border: none; }
-    .stButton > button[kind="primary"]:hover { background-color: #17835f; border: none; }
-    .stDownloadButton > button { background-color: #1D9E75; color: white; border: none; }
-    .stDownloadButton > button:hover { background-color: #17835f; }
-    .stAlert { border-radius: 8px; }
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3 { color: #111827; }
+
+    /* Überschriften */
+    h1 { color: #111827 !important; font-weight: 700 !important; font-size: 2rem !important; }
+    h2 { color: #111827 !important; font-weight: 600 !important; }
+    h3 { color: #374151 !important; font-weight: 600 !important; }
+
+    /* Metriken – weiße Cards */
+    div[data-testid="metric-container"] {
+        background: #FFFFFF;
+        border: 1px solid #E5E7EB;
+        border-radius: 12px;
+        padding: 16px 20px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    div[data-testid="metric-container"] label { color: #6B7280 !important; font-size: 13px !important; }
+    div[data-testid="metric-container"] [data-testid="stMetricValue"] {
+        color: #111827 !important;
+        font-weight: 600 !important;
+    }
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        background: #FFFFFF;
+        border-radius: 10px;
+        padding: 4px;
+        border: 1px solid #E5E7EB;
+        gap: 2px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px;
+        font-weight: 500;
+        color: #6B7280;
+        padding: 8px 16px;
+    }
+    .stTabs [data-baseweb="tab-highlight"] { background-color: transparent; }
+    .stTabs [aria-selected="true"] {
+        background: #F0FDF9 !important;
+        color: #0D9488 !important;
+        font-weight: 600 !important;
+    }
+
+    /* Buttons */
+    .stButton > button {
+        border-radius: 8px;
+        font-weight: 500;
+        font-size: 14px;
+        border: 1px solid #D1D5DB;
+        background: #FFFFFF;
+        color: #374151;
+        transition: all 0.15s;
+    }
+    .stButton > button:hover {
+        border-color: #0D9488;
+        color: #0D9488;
+        background: #F0FDF9;
+    }
+    .stButton > button[kind="primary"] {
+        background: #0D9488;
+        color: white;
+        border: none;
+    }
+    .stButton > button[kind="primary"]:hover {
+        background: #0B7A70;
+    }
+    .stDownloadButton > button {
+        background: #0D9488;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-weight: 500;
+    }
+    .stDownloadButton > button:hover { background: #0B7A70; }
+
+    /* File Uploader */
+    [data-testid="stFileUploader"] {
+        border: 2px dashed #D1D5DB;
+        border-radius: 12px;
+        background: #FFFFFF;
+        padding: 8px;
+    }
+    [data-testid="stFileUploader"]:hover { border-color: #0D9488; }
+
+    /* Divider */
+    hr { border-color: #E5E7EB; }
+
+    /* Alerts */
+    .stAlert { border-radius: 10px; font-size: 14px; }
+
+    /* Expander */
+    .streamlit-expanderHeader {
+        background: #FFFFFF;
+        border-radius: 8px;
+        border: 1px solid #E5E7EB;
+        font-weight: 500;
+    }
+
+    /* DataEditor / DataFrame */
+    [data-testid="stDataFrame"], [data-testid="stDataEditor"] {
+        border: 1px solid #E5E7EB;
+        border-radius: 10px;
+        overflow: hidden;
+    }
+
+    /* Caption text */
+    .stCaption, [data-testid="stCaptionContainer"] { color: #9CA3AF; font-size: 12px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -180,18 +295,28 @@ heute = date.today()
 kw    = heute.isocalendar()[1]
 year  = heute.year
 
-col_titel, col_info = st.columns([6, 2])
-with col_titel:
-    st.title("🛒 Healthii Purchasing Agent – Leopold")
-with col_info:
-    st.markdown(f"<div style='text-align:right;padding-top:12px;color:#888;font-size:13px;'>"
-                f"📅 {heute.strftime('%d.%m.%Y')} &nbsp;|&nbsp; KW{kw:02d}/{year}</div>",
-                unsafe_allow_html=True)
-    drive_status = "🟢 Drive verbunden" if st.session_state.drive else "🔴 Drive nicht verbunden"
-    st.markdown(f"<div style='text-align:right;color:#888;font-size:12px;'>{drive_status}</div>",
-                unsafe_allow_html=True)
+# Header im Healthii-Stil
+drive_status_color = "#0D9488" if st.session_state.drive else "#EF4444"
+drive_status_text  = "Drive verbunden" if st.session_state.drive else "Drive nicht verbunden"
 
-st.divider()
+st.markdown(f"""
+<div style='display:flex;align-items:center;justify-content:space-between;
+            padding:0 0 20px 0;border-bottom:1px solid #E5E7EB;margin-bottom:24px;'>
+    <div style='display:flex;align-items:center;gap:12px;'>
+        <span style='font-size:24px;font-weight:700;color:#111827;letter-spacing:-0.5px;'>healthii</span>
+        <span style='background:#F0FDF9;color:#0D9488;font-size:11px;font-weight:600;
+                     padding:3px 10px;border-radius:20px;letter-spacing:0.5px;'>PURCHASING</span>
+    </div>
+    <div style='display:flex;align-items:center;gap:16px;'>
+        <span style='color:#6B7280;font-size:13px;'>
+            📅 {heute.strftime('%d.%m.%Y')} &nbsp;·&nbsp; KW{kw:02d}/{year}
+        </span>
+        <span style='font-size:12px;color:{drive_status_color};font-weight:500;'>
+            ● {drive_status_text}
+        </span>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
