@@ -88,6 +88,43 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ─── Passwortschutz ───────────────────────────────────────────────────────────
+
+def check_password():
+    """Gibt True zurück wenn das Passwort korrekt ist."""
+    try:
+        app_password = st.secrets.get("APP_PASSWORD", None)
+    except Exception:
+        app_password = None
+
+    # Kein Passwort konfiguriert → freier Zugang (lokal)
+    if not app_password:
+        return True
+
+    if st.session_state.get("authenticated"):
+        return True
+
+    st.markdown("""
+    <div style='max-width:400px;margin:80px auto;'>
+        <h2 style='color:#1D9E75;text-align:center;'>🛒 Healthii Purchasing</h2>
+        <p style='color:#888;text-align:center;'>Bitte melde dich an</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        pw = st.text_input("Passwort", type="password", label_visibility="collapsed",
+                           placeholder="Passwort eingeben …")
+        if st.button("Anmelden", use_container_width=True, type="primary"):
+            if pw == app_password:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Falsches Passwort")
+    st.stop()
+
+check_password()
+
 st.markdown("""
 <style>
     [data-testid="stAppViewContainer"] { background: #f4f8f6; }
