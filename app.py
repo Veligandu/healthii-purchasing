@@ -38,6 +38,33 @@ def is_cloud() -> bool:
         return False
 
 
+def lade_letzte_bestellung_fuer_berechnung(drive=None):
+    """Gibt letzte_bestellung_df für berechne_bestellvorschlag zurück.
+    Bevorzugt Drive (Cloud), fällt auf lokale Datei zurück."""
+    # Erst lokal versuchen
+    pfad = finde_letzte_bestellung_excel()
+    if pfad is not None:
+        return lade_letzte_bestellung(pfad)
+    # Cloud: aus Drive laden
+    if drive is None:
+        return None
+    try:
+        _, df_hist = finde_letzte_bestellung(drive)
+        if df_hist is None:
+            return None
+        df_hist["Pzn"] = df_hist["Pzn"].astype(str)
+        nicht_eingelagert = df_hist[
+            df_hist["eingelagert"].astype(str).str.strip().str.lower() == "nein"
+        ].copy()
+        if nicht_eingelagert.empty:
+            return None
+        return nicht_eingelagert[["Pzn", "Bestellmenge"]].rename(
+            columns={"Bestellmenge": "Bestellmenge_letzte_Woche"}
+        )
+    except Exception:
+        return None
+
+
 def finde_letzte_bestellung(drive=None):
     """Gibt (pfad_oder_none, df_oder_none) zurück — lokal oder aus Drive."""
     if is_cloud() and drive:
@@ -347,18 +374,8 @@ if not st.session_state.drive_verbunden:
                         _, _done = _dl.next_chunk()
                     excel_bytes = _buf.getvalue()
 
-                    # 2. Bestellhistorie aus Drive laden und aufbereiten (wie lade_letzte_bestellung)
-                    _, _df_hist = finde_letzte_bestellung(drive)
-                    letzte_bestellung_df = None
-                    if _df_hist is not None:
-                        _df_hist["Pzn"] = _df_hist["Pzn"].astype(str)
-                        _nicht_eingelagert = _df_hist[
-                            _df_hist["eingelagert"].astype(str).str.strip().str.lower() == "nein"
-                        ].copy()
-                        if not _nicht_eingelagert.empty:
-                            letzte_bestellung_df = _nicht_eingelagert[["Pzn", "Bestellmenge"]].rename(
-                                columns={"Bestellmenge": "Bestellmenge_letzte_Woche"}
-                            )
+                    # 2. Bestellhistorie aufbereiten
+                    letzte_bestellung_df = lade_letzte_bestellung_fuer_berechnung(drive)
 
                     # 3. MBW-Ausnahmen laden
                     mbw_ausnahmen = {}
@@ -451,8 +468,7 @@ with st.sidebar:
                     except Exception:
                         pass
 
-                letzte_excel         = finde_letzte_bestellung_excel()
-                letzte_bestellung_df = lade_letzte_bestellung(letzte_excel)
+                letzte_bestellung_df = lade_letzte_bestellung_fuer_berechnung(st.session_state.drive)
                 mbw_ausnahmen = {}
                 if st.session_state.drive:
                     try:
@@ -475,14 +491,17 @@ with st.sidebar:
         else:
             st.success(f"✓ {uploaded.name}")
 
+    # Auto-geladene Datei anzeigen
+    elif st.session_state.get("uploaded_filename"):
+        st.success(f"✓ {st.session_state.uploaded_filename} (aus Drive)")
+
     # Neu berechnen — immer sichtbar wenn eine Datei geladen ist
     if st.session_state.get("excel_bytes_input"):
         st.divider()
         if st.button("🔄 Neu berechnen", use_container_width=True,
                      help="Bestellvorschlag mit aktualisierter Bestellhistorie neu berechnen"):
             with st.spinner("Berechne neu …"):
-                letzte_excel         = finde_letzte_bestellung_excel()
-                letzte_bestellung_df = lade_letzte_bestellung(letzte_excel)
+                letzte_bestellung_df = lade_letzte_bestellung_fuer_berechnung(st.session_state.drive)
                 mbw_ausnahmen = {}
                 if st.session_state.drive:
                     try:
