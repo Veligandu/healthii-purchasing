@@ -385,6 +385,8 @@ with st.sidebar:
         c1, c2 = st.columns(2)
         c1.metric("Offen", n_offen, help="Noch nicht eingelagert")
         c2.metric("Eingelagert", n_gesamt - n_offen)
+        if n_offen > 0:
+            st.caption("✏️ Zum Bearbeiten → Tab **Bestellhistorie**")
     else:
         st.info("Keine Bestellhistorie gefunden")
 
