@@ -212,7 +212,7 @@ def speichere_monatstabelle_in_drive(_drive, df, jahr, monat):
 # Zeilenmuster: Lagerort  Menge  [Einheit/Name...]  [V-Dat]  Pos  PZN
 #               VP_mit_MWSt  EK_ohne_MWSt  Warenwert_ohne_MWSt  OA/FA  S
 _ZEILEN_RE = re.compile(
-    r"^\s*1\s+\d+\s+(\d+)\s+.+?\b(\d{8})\b\s+[\d,]+\s+([\d,]+)\s+([\d,]+)\s+[OF]A",
+    r"^\s*\d+\s+\d+\s+(\d+)\s+.+?\b(\d{8})\b\s+[\d,]+\s+([\d,]+)\s+([\d,]+)\s+[OF]A",
     re.MULTILINE,
 )
 # Rechnungssumme: letzte Zahl vor "DAFUE" in der Summenzeile
