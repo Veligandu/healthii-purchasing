@@ -390,38 +390,25 @@ with st.sidebar:
     else:
         st.info("Keine Bestellhistorie gefunden")
 
-# ─── Kein Upload → Hinweis ────────────────────────────────────────────────────
+# ─── Ergebnis & Tabs ──────────────────────────────────────────────────────────
 
-if st.session_state.ergebnis is None:
-    st.markdown("""
-    <div style='text-align:center;padding:60px 0;color:#aaa;'>
-        <div style='font-size:48px;'>📄</div>
-        <div style='font-size:18px;margin-top:12px;'>
-            Bitte <b>wiederbestellung.xlsx</b> in der Seitenleiste hochladen
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.stop()
+ergebnis     = st.session_state.ergebnis
+df_bestellen = st.session_state.df_bestellen_edit
+df_unter_mbw = ergebnis["unter_mbw"] if ergebnis else pd.DataFrame()
 
-# ─── Ergebnis ─────────────────────────────────────────────────────────────────
-
-ergebnis       = st.session_state.ergebnis
-df_bestellen   = st.session_state.df_bestellen_edit
-df_unter_mbw   = ergebnis["unter_mbw"] if ergebnis else pd.DataFrame()
-
-# KPI-Leiste
-c1, c2, c3, c4 = st.columns(4)
-if df_bestellen is not None and not df_bestellen.empty:
-    c1.metric("Gesamtbestellwert",  f"{df_bestellen['Bestellwert'].sum():,.0f} €")
-    c2.metric("Hersteller",         df_bestellen["Hersteller"].nunique())
-    c3.metric("Positionen",         len(df_bestellen))
-if not df_unter_mbw.empty:
-    c4.metric("Unter MBW",
-              f"{df_unter_mbw['Hersteller'].nunique()} Hersteller",
-              delta=f"{len(df_unter_mbw)} Pos.",
-              delta_color="off")
-
-st.divider()
+# KPI-Leiste — nur wenn Ergebnis vorhanden
+if ergebnis is not None:
+    c1, c2, c3, c4 = st.columns(4)
+    if df_bestellen is not None and not df_bestellen.empty:
+        c1.metric("Gesamtbestellwert", f"{df_bestellen['Bestellwert'].sum():,.0f} €")
+        c2.metric("Hersteller",        df_bestellen["Hersteller"].nunique())
+        c3.metric("Positionen",        len(df_bestellen))
+    if not df_unter_mbw.empty:
+        c4.metric("Unter MBW",
+                  f"{df_unter_mbw['Hersteller'].nunique()} Hersteller",
+                  delta=f"{len(df_unter_mbw)} Pos.",
+                  delta_color="off")
+    st.divider()
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
 
@@ -437,7 +424,15 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # ══════════════════════════════════════════════════════════════════════════════
 
 with tab1:
-    if df_bestellen is None or df_bestellen.empty:
+    if ergebnis is None:
+        st.markdown("""
+        <div style='text-align:center;padding:60px 0;color:#9CA3AF;'>
+            <div style='font-size:48px;'>📄</div>
+            <div style='font-size:16px;margin-top:12px;'>
+                Bitte <b>wiederbestellung.xlsx</b> in der Seitenleiste hochladen
+            </div>
+        </div>""", unsafe_allow_html=True)
+    elif df_bestellen is None or df_bestellen.empty:
         st.info("Keine Bestellungen über MBW.")
     else:
         with st.expander("🔍 Berechnungslog"):
@@ -545,7 +540,15 @@ with tab1:
 # ══════════════════════════════════════════════════════════════════════════════
 
 with tab2:
-    if df_unter_mbw.empty:
+    if ergebnis is None:
+        st.markdown("""
+        <div style='text-align:center;padding:60px 0;color:#9CA3AF;'>
+            <div style='font-size:48px;'>📄</div>
+            <div style='font-size:16px;margin-top:12px;'>
+                Bitte <b>wiederbestellung.xlsx</b> in der Seitenleiste hochladen
+            </div>
+        </div>""", unsafe_allow_html=True)
+    elif df_unter_mbw.empty:
         st.success("✅ Alle Hersteller erreichen den Mindestbestellwert.")
     else:
         gesamt_potential = df_unter_mbw["Bestellwert"].sum()
