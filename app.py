@@ -111,18 +111,22 @@ def check_password():
         with open(_logo_path, "rb") as _f:
             _logo_b64 = base64.b64encode(_f.read()).decode()
 
-    # Hintergrund + Card-Styling
+    # Hintergrund + Card-Styling via CSS auf st.form
     st.markdown("""
     <style>
     [data-testid="stAppViewContainer"] { background: #F3F4F6; }
-    [data-testid="stMain"] { background: #F3F4F6; }
-    [data-testid="stSidebar"] { display: none; }
-    div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="element-container"])
-        > div[data-testid="element-container"] { padding: 0; }
+    [data-testid="stMain"]             { background: #F3F4F6; }
+    [data-testid="stSidebar"]          { display: none; }
+    [data-testid="stForm"] {
+        background: white;
+        border: 1px solid #E5E7EB !important;
+        border-radius: 16px;
+        padding: 32px !important;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+    }
     </style>
     """, unsafe_allow_html=True)
 
-    # Zentrierte Login-Card
     _, col, _ = st.columns([1, 1.4, 1])
     with col:
         st.markdown("<div style='height:60px'></div>", unsafe_allow_html=True)
@@ -137,35 +141,33 @@ def check_password():
             )
         # Badge
         st.markdown(
-            "<div style='text-align:center;margin-bottom:28px;'>"
+            "<div style='text-align:center;margin-bottom:20px;'>"
             "<span style='background:#F0FDF9;color:#0D9488;font-size:10px;font-weight:600;"
             "padding:3px 10px;border-radius:20px;letter-spacing:0.8px;"
             "border:1px solid #CCFBF1;'>PURCHASING-AGENT</span></div>",
             unsafe_allow_html=True,
         )
 
-        # Card-Rahmen öffnen
-        st.markdown(
-            "<div style='background:white;border:1px solid #E5E7EB;border-radius:16px;"
-            "padding:32px;box-shadow:0 4px 16px rgba(0,0,0,0.06);'>"
-            "<h3 style='margin:0 0 4px;color:#111827;font-size:20px;font-weight:600;'>Anmelden</h3>"
-            "<p style='color:#6B7280;font-size:14px;margin:0 0 20px;'>"
-            "Bitte melde dich an um fortzufahren.</p>",
-            unsafe_allow_html=True,
-        )
+        # Login-Form (echter Container → Card-CSS greift)
+        with st.form("login_form"):
+            st.markdown(
+                "<h3 style='margin:0 0 4px;color:#111827;font-size:20px;font-weight:600;'>Anmelden</h3>"
+                "<p style='color:#6B7280;font-size:14px;margin:0 0 16px;'>"
+                "Bitte melde dich an um fortzufahren.</p>",
+                unsafe_allow_html=True,
+            )
+            pw = st.text_input("Passwort", type="password",
+                               label_visibility="collapsed",
+                               placeholder="Passwort eingeben …")
+            submitted = st.form_submit_button("Anmelden", use_container_width=True, type="primary")
 
-        pw = st.text_input("Passwort", type="password",
-                           label_visibility="collapsed",
-                           placeholder="Passwort eingeben …")
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        if st.button("Anmelden", use_container_width=True, type="primary"):
+        if submitted:
             if pw == app_password:
                 st.session_state.authenticated = True
                 st.rerun()
             else:
-                st.error("Falsches Passwort. Bitte erneut versuchen.")
-
-        st.markdown("</div>", unsafe_allow_html=True)
+                with col:
+                    st.error("Falsches Passwort. Bitte erneut versuchen.")
 
     st.stop()
 
