@@ -248,10 +248,11 @@ st.divider()
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "🛒 Bestellvorschläge",
     "⚠️ Unter MBW – nicht bestellt",
     "📋 Bestellhistorie",
+    "📁 Bestellarchiv",
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -455,3 +456,88 @@ with tab3:
             df_hist.to_excel(letzte_excel, index=False, sheet_name="Abfrageergebnis")
             st.success("✓ Bestellhistorie aktualisiert")
             st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4 – Bestellarchiv
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab4:
+    drive = st.session_state.drive
+
+    if not drive:
+        st.warning("Drive nicht verbunden — Archiv nicht verfügbar.")
+    else:
+        @st.cache_data(ttl=60, show_spinner=False)
+        def lade_archiv_liste(_drive):
+            """Listet alle Purchase-Order Dateien aus Drive."""
+            results = _drive.files().list(
+                q="name contains 'Purchase-Order' and trashed=false",
+                fields="files(id, name, modifiedTime)",
+                orderBy="modifiedTime desc",
+                pageSize=50,
+            ).execute()
+            return results.get("files", [])
+
+        def lade_purchase_order(_drive, file_id):
+            """Lädt eine Purchase-Order Excel aus Drive und gibt einen DataFrame zurück."""
+            from googleapiclient.http import MediaIoBaseDownload
+            buf = io.BytesIO()
+            downloader = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=file_id))
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            buf.seek(0)
+            # Zeile 1 = Info-Banner überspringen, Zeile 2 = Header
+            df = pd.read_excel(buf, skiprows=1)
+            # Summenzeilen herausfiltern (PZN leer oder kein gültiger Wert)
+            if "PZN" in df.columns:
+                df = df[df["PZN"].notna() & (df["PZN"].astype(str).str.strip() != "")]
+            return df
+
+        dateien = lade_archiv_liste(drive)
+
+        if not dateien:
+            st.info("Noch keine Purchase-Orders in Drive archiviert.")
+        else:
+            # Auswahl-Dropdown
+            datei_namen  = [f["name"] for f in dateien]
+            datei_ids    = {f["name"]: f["id"] for f in dateien}
+            datei_zeiten = {f["name"]: f["modifiedTime"][:10] for f in dateien}
+
+            ausgewählt = st.selectbox(
+                "Purchase-Order auswählen",
+                options=datei_namen,
+                format_func=lambda n: f"{n}  ({datei_zeiten[n]})",
+            )
+
+            if ausgewählt:
+                with st.spinner("Lade …"):
+                    df_archiv = lade_purchase_order(drive, datei_ids[ausgewählt])
+
+                # KPIs
+                if not df_archiv.empty and "Bestellwert (€)" in df_archiv.columns:
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Bestellwert gesamt", f"{df_archiv['Bestellwert (€)'].sum():,.0f} €")
+                    if "Hersteller" in df_archiv.columns:
+                        c2.metric("Hersteller", df_archiv["Hersteller"].nunique())
+                    c3.metric("Positionen", len(df_archiv))
+
+                st.dataframe(
+                    df_archiv,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                # Download-Button
+                from googleapiclient.http import MediaIoBaseDownload
+                buf_dl = io.BytesIO()
+                dl = MediaIoBaseDownload(buf_dl, drive.files().get_media(fileId=datei_ids[ausgewählt]))
+                done = False
+                while not done:
+                    _, done = dl.next_chunk()
+                st.download_button(
+                    label="📥 Excel herunterladen",
+                    data=buf_dl.getvalue(),
+                    file_name=ausgewählt,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
