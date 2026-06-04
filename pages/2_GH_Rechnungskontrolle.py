@@ -209,39 +209,53 @@ def speichere_monatstabelle_in_drive(_drive, df, jahr, monat):
 
 # ─── PDF-Parser ───────────────────────────────────────────────────────────────
 
-# Zeilenmuster: Lagerort  Menge  [Einheit/Name...]  [V-Dat]  Pos  PZN  Preise  OA/FA  S
+# Zeilenmuster: Lagerort  Menge  [Einheit/Name...]  [V-Dat]  Pos  PZN
+#               VP_mit_MWSt  EK_ohne_MWSt  Warenwert_ohne_MWSt  OA/FA  S
 _ZEILEN_RE = re.compile(
-    r"^\s*1\s+\d+\s+(\d+)\s+.+?\b(\d{8})\b\s+[\d,]+\s+[\d,]+\s+[\d,]+\s+[OF]A",
+    r"^\s*1\s+\d+\s+(\d+)\s+.+?\b(\d{8})\b\s+[\d,]+\s+([\d,]+)\s+([\d,]+)\s+[OF]A",
     re.MULTILINE,
 )
+# Rechnungssumme: letzte Zahl vor "DAFUE" in der Summenzeile
+_TOTAL_RE = re.compile(r"([\d]+,\d+)\s+DAFUE")
+
+def _preis(s: str) -> float:
+    return float(s.replace(",", "."))
 
 def datum_aus_dateiname(name: str):
-    """Extrahiert (jahr, monat, tag) aus Dateinamen wie 'Sammelrechnung_01-04-26_...' oder '..._2026-04-01.pdf'."""
-    # Format YYYY-MM-DD am Ende
     m = re.search(r"(\d{4})-(\d{2})-(\d{2})", name)
     if m:
         return int(m.group(1)), int(m.group(2)), int(m.group(3))
-    # Format DD-MM-YY nach erstem _
     m = re.search(r"_(\d{2})-(\d{2})-(\d{2})_", name)
     if m:
         tag, monat, jahr_kurz = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        jahr = 2000 + jahr_kurz
-        return jahr, monat, tag
+        return 2000 + jahr_kurz, monat, tag
     return None, None, None
 
 
-def parse_pdf(datei_bytes: bytes, dateiname: str) -> pd.DataFrame:
-    """Gibt DataFrame mit Spalten [PZN, Menge, Jahr, Monat] zurück."""
+def parse_pdf(datei_bytes: bytes, dateiname: str) -> tuple[pd.DataFrame, float | None]:
+    """Gibt (DataFrame mit Positionen, Rechnungssumme aus PDF) zurück."""
     jahr, monat, _ = datum_aus_dateiname(dateiname)
+    m_beleg = re.search(r"INVOICE-(\d+)", dateiname, re.IGNORECASE)
+    beleg = m_beleg.group(1) if m_beleg else dateiname
     zeilen = []
+    total_pdf = None
     with pdfplumber.open(io.BytesIO(datei_bytes)) as pdf:
         for seite in pdf.pages:
             text = seite.extract_text() or ""
             for m in _ZEILEN_RE.finditer(text):
-                menge = int(m.group(1))
-                pzn   = m.group(2)
-                zeilen.append({"PZN": pzn, "Menge": menge, "Jahr": jahr, "Monat": monat})
-    return pd.DataFrame(zeilen)
+                zeilen.append({
+                    "PZN":          m.group(2),
+                    "Menge":        int(m.group(1)),
+                    "EK_ohne_MWSt": _preis(m.group(3)),
+                    "Warenwert":    _preis(m.group(4)),
+                    "Beleg":        beleg,
+                    "Jahr":         jahr,
+                    "Monat":        monat,
+                })
+            m_total = _TOTAL_RE.search(text)
+            if m_total:
+                total_pdf = _preis(m_total.group(1))
+    return pd.DataFrame(zeilen), total_pdf
 
 # ─── Header ───────────────────────────────────────────────────────────────────
 
@@ -324,25 +338,33 @@ with st.sidebar:
 
 monat_label = f"{monat_auswahl:02d}/{jahr_auswahl}"
 
-# Session State für aktuellen Monat
-state_key = f"gh_{jahr_auswahl}_{monat_auswahl:02d}"
-if state_key not in st.session_state:
-    st.session_state[state_key] = None
+# Session State-Keys
+roh_key    = f"gh_roh_{jahr_auswahl}_{monat_auswahl:02d}"    # Rohzeilen pro Beleg
+totals_key = f"gh_totals_{jahr_auswahl}_{monat_auswahl:02d}" # PDF-Summen pro Beleg
+agg_key    = f"gh_agg_{jahr_auswahl}_{monat_auswahl:02d}"    # aggregierte Monatstabelle
 
-# PDFs verarbeiten
+for k in [roh_key, totals_key, agg_key]:
+    if k not in st.session_state:
+        st.session_state[k] = None
+
+# ─── PDFs einlesen ────────────────────────────────────────────────────────────
+
 if verarbeiten and uploads:
     alle_zeilen = []
+    totals_neu  = {}   # beleg → total_pdf
     fehler = []
     fortschritt = st.progress(0, text="Lese PDFs …")
 
     for i, pdf_file in enumerate(uploads):
-        fortschritt.progress((i + 1) / len(uploads), text=f"{pdf_file.name}")
+        fortschritt.progress((i + 1) / len(uploads), text=pdf_file.name)
         try:
-            df_pdf = parse_pdf(pdf_file.read(), pdf_file.name)
+            df_pdf, total_pdf = parse_pdf(pdf_file.read(), pdf_file.name)
             if df_pdf.empty:
                 fehler.append(f"⚠️ {pdf_file.name}: Keine Positionen gefunden")
             else:
                 alle_zeilen.append(df_pdf)
+                beleg = df_pdf["Beleg"].iloc[0]
+                totals_neu[beleg] = total_pdf
         except Exception as e:
             fehler.append(f"❌ {pdf_file.name}: {e}")
 
@@ -351,85 +373,157 @@ if verarbeiten and uploads:
     if alle_zeilen:
         df_neu = pd.concat(alle_zeilen, ignore_index=True)
 
-        # Mit bereits geladenen Daten zusammenführen
-        df_bestehend = st.session_state[state_key]
-        if df_bestehend is not None:
-            df_gesamt = pd.concat([df_bestehend, df_neu], ignore_index=True)
+        # Mit bestehendem Monat zusammenführen (Duplikat-Belege ersetzen)
+        df_alt = st.session_state[roh_key]
+        if df_alt is not None:
+            belege_neu = set(df_neu["Beleg"].unique())
+            df_alt = df_alt[~df_alt["Beleg"].isin(belege_neu)]
+            df_gesamt = pd.concat([df_alt, df_neu], ignore_index=True)
         else:
             df_gesamt = df_neu
 
-        # Aggregieren: PZN × Menge summieren
-        df_agg = (
-            df_gesamt
-            .groupby("PZN", as_index=False)["Menge"]
-            .sum()
-            .sort_values("Menge", ascending=False)
-            .reset_index(drop=True)
-        )
+        totals_alt = st.session_state[totals_key] or {}
+        totals_alt.update(totals_neu)
 
-        st.session_state[state_key] = df_gesamt  # Rohzeilen für spätere Ergänzungen merken
-
-        # In Drive speichern
-        if drive:
-            try:
-                speichere_monatstabelle_in_drive(drive, df_agg, int(jahr_auswahl), monat_auswahl)
-                st.success(f"✓ {len(uploads)} PDF(s) eingelesen · {len(df_agg)} PZNs · in Drive gespeichert")
-            except Exception as e:
-                st.warning(f"Eingelesen, aber Drive-Speicherung fehlgeschlagen: {e}")
-        else:
-            st.success(f"✓ {len(uploads)} PDF(s) eingelesen · {len(df_agg)} PZNs")
+        st.session_state[roh_key]    = df_gesamt
+        st.session_state[totals_key] = totals_alt
 
         for f in fehler:
             st.warning(f)
-
-        # Tabelle in Session State für Anzeige
-        st.session_state[f"gh_agg_{jahr_auswahl}_{monat_auswahl:02d}"] = df_agg
-
     else:
         st.error("Keine Daten konnten extrahiert werden.")
         for f in fehler:
             st.warning(f)
 
-# ─── Tabelle anzeigen ─────────────────────────────────────────────────────────
+# ─── Belegkontrolle ───────────────────────────────────────────────────────────
 
-agg_key = f"gh_agg_{jahr_auswahl}_{monat_auswahl:02d}"
+df_roh   = st.session_state.get(roh_key)
+totals   = st.session_state.get(totals_key) or {}
 
-# Aus Session State oder Drive laden
-df_agg = st.session_state.get(agg_key)
-if df_agg is None and drive:
-    df_agg = lade_monatstabelle_aus_drive(drive, int(jahr_auswahl), monat_auswahl)
-    if df_agg is not None:
-        st.session_state[agg_key] = df_agg
+if df_roh is not None and not df_roh.empty:
+    st.subheader(f"Belegkontrolle {monat_label}")
 
-if df_agg is not None and not df_agg.empty:
-    st.subheader(f"Monatstabelle {monat_label}")
+    # Beleg-Übersicht aufbauen
+    df_belege = (
+        df_roh.groupby("Beleg", as_index=False)
+        .agg(Positionen=("PZN", "count"), Warenwert_berechnet=("Warenwert", "sum"))
+        .sort_values("Beleg")
+    )
+    df_belege["Warenwert_Beleg"] = df_belege["Beleg"].map(totals)
+    df_belege["Differenz"]       = (
+        df_belege["Warenwert_berechnet"] - df_belege["Warenwert_Beleg"]
+    ).round(2)
+    df_belege["Status"] = df_belege["Differenz"].apply(
+        lambda d: "✅" if pd.notna(d) and abs(d) < 0.01 else ("⚠️ Abweichung" if pd.notna(d) else "❓")
+    )
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("PZNs", len(df_agg))
-    c2.metric("Einheiten gesamt", int(df_agg["Menge"].sum()))
-    c3.metric("Monat", monat_label)
+    n_ok  = (df_belege["Status"] == "✅").sum()
+    n_err = len(df_belege) - n_ok
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Belege", len(df_belege))
+    c2.metric("✅ OK", n_ok)
+    c3.metric("⚠️ Abweichungen", n_err)
+    c4.metric("Gesamtwert", f"{df_belege['Warenwert_berechnet'].sum():,.2f} €")
 
     st.divider()
 
+    # Übersichtstabelle
     st.dataframe(
-        df_agg,
+        df_belege[["Status", "Beleg", "Positionen", "Warenwert_berechnet", "Warenwert_Beleg", "Differenz"]],
         column_config={
-            "PZN":   st.column_config.TextColumn("PZN"),
-            "Menge": st.column_config.NumberColumn("Menge", format="%d"),
+            "Status":               st.column_config.TextColumn(""),
+            "Beleg":                st.column_config.TextColumn("Belegnr."),
+            "Positionen":           st.column_config.NumberColumn("Pos.", format="%d"),
+            "Warenwert_berechnet":  st.column_config.NumberColumn("Berechnet (€)",  format="%.2f"),
+            "Warenwert_Beleg":      st.column_config.NumberColumn("Laut Beleg (€)", format="%.2f"),
+            "Differenz":            st.column_config.NumberColumn("Differenz (€)",  format="%.2f"),
         },
         use_container_width=True,
         hide_index=True,
     )
 
-    # Excel-Export
-    _buf = io.BytesIO()
-    df_agg.to_excel(_buf, index=False, sheet_name=f"GH {monat_label}")
-    st.download_button(
-        label="📥 Excel herunterladen",
-        data=_buf.getvalue(),
-        file_name=f"gh_rechnung_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    # Editierbare Einzelzeilen bei Abweichungen
+    belege_abweichend = df_belege[df_belege["Status"] != "✅"]["Beleg"].tolist()
+    if belege_abweichend:
+        st.divider()
+        st.subheader("Positionen korrigieren")
+        for beleg in belege_abweichend:
+            diff = df_belege.loc[df_belege["Beleg"] == beleg, "Differenz"].iloc[0]
+            with st.expander(f"⚠️ Beleg {beleg}  —  Differenz: {diff:+.2f} €"):
+                df_b = df_roh[df_roh["Beleg"] == beleg].copy()
+                edit_cols = ["PZN", "Menge", "EK_ohne_MWSt", "Warenwert"]
+                edited = st.data_editor(
+                    df_b[edit_cols].reset_index(drop=True),
+                    column_config={
+                        "PZN":          st.column_config.TextColumn("PZN"),
+                        "Menge":        st.column_config.NumberColumn("Menge",        min_value=0, step=1),
+                        "EK_ohne_MWSt": st.column_config.NumberColumn("EK o. MWSt (€)", format="%.2f"),
+                        "Warenwert":    st.column_config.NumberColumn("Warenwert (€)", format="%.2f", disabled=True),
+                    },
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    hide_index=True,
+                    key=f"editor_beleg_{beleg}",
+                )
+                # Warenwert live neu berechnen
+                edited["Warenwert"] = (edited["Menge"] * edited["EK_ohne_MWSt"]).round(2)
+
+                if st.button("💾 Korrekturen übernehmen", key=f"save_{beleg}", type="primary"):
+                    edited["Beleg"] = beleg
+                    edited["Jahr"]  = df_b["Jahr"].iloc[0]
+                    edited["Monat"] = df_b["Monat"].iloc[0]
+                    df_rest = df_roh[df_roh["Beleg"] != beleg]
+                    st.session_state[roh_key] = pd.concat([df_rest, edited], ignore_index=True)
+                    st.success(f"✓ Beleg {beleg} aktualisiert")
+                    st.rerun()
+
+    # ─── Monatstabelle aggregieren & speichern ────────────────────────────────
+
+    st.divider()
+    st.subheader(f"Monatstabelle {monat_label}")
+
+    df_agg = (
+        df_roh
+        .groupby("PZN", as_index=False)
+        .agg(Menge=("Menge", "sum"), Warenwert=("Warenwert", "sum"))
+        .sort_values("Warenwert", ascending=False)
+        .reset_index(drop=True)
     )
+    st.session_state[agg_key] = df_agg
+
+    st.dataframe(
+        df_agg,
+        column_config={
+            "PZN":      st.column_config.TextColumn("PZN"),
+            "Menge":    st.column_config.NumberColumn("Menge",         format="%d"),
+            "Warenwert": st.column_config.NumberColumn("Warenwert (€)", format="%.2f"),
+        },
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    col_save, col_dl = st.columns(2)
+
+    with col_save:
+        if drive and st.button("💾 In Drive speichern", use_container_width=True, type="primary"):
+            try:
+                speichere_monatstabelle_in_drive(drive, df_agg, int(jahr_auswahl), monat_auswahl)
+                st.success("✓ In Drive gespeichert")
+            except Exception as e:
+                st.error(f"Drive-Fehler: {e}")
+
+    with col_dl:
+        _buf = io.BytesIO()
+        with pd.ExcelWriter(_buf, engine="openpyxl") as _w:
+            df_agg.to_excel(_w, index=False, sheet_name=f"Monat {monat_label}")
+            df_belege.to_excel(_w, index=False, sheet_name="Belegkontrolle")
+        st.download_button(
+            label="📥 Excel herunterladen",
+            data=_buf.getvalue(),
+            file_name=f"gh_rechnung_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 
 else:
     st.markdown("""
