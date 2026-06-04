@@ -497,7 +497,6 @@ with st.sidebar:
 
     # Neu berechnen — immer sichtbar wenn eine Datei geladen ist
     if st.session_state.get("excel_bytes_input"):
-        st.divider()
         if st.button("🔄 Neu berechnen", use_container_width=True,
                      help="Bestellvorschlag mit aktualisierter Bestellhistorie neu berechnen"):
             with st.spinner("Berechne neu …"):
