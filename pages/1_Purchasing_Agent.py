@@ -621,7 +621,11 @@ with tab1:
                 pass
 
         if _mbw_df_current is None:
-            _mbw_df_current = pd.DataFrame({"Hersteller": [], "MBW": []})
+            _mbw_df_current = pd.DataFrame({"Hersteller": pd.Series([], dtype=str), "MBW": pd.Series([], dtype=float)})
+        else:
+            _mbw_df_current = _mbw_df_current[["Hersteller", "MBW"]].copy()
+            _mbw_df_current["Hersteller"] = _mbw_df_current["Hersteller"].astype(str)
+            _mbw_df_current["MBW"] = pd.to_numeric(_mbw_df_current["MBW"], errors="coerce").fillna(0.0)
 
         _mbw_edited = st.data_editor(
             _mbw_df_current,
