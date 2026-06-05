@@ -119,6 +119,9 @@ h3 { color: #374151 !important; font-weight: 600 !important; }
 .stDownloadButton > button:hover { background: #0B7A70; }
 [data-testid="stDataFrame"], [data-testid="stDataEditor"] { border: 1px solid #E5E7EB; border-radius: 10px; overflow: hidden; }
 div[data-testid="metric-container"] { background: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 12px; padding: 16px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+[data-baseweb="tab-highlight"] { background-color: #0D9488 !important; }
+button[data-baseweb="tab"][aria-selected="true"] { color: #0D9488 !important; }
+button[data-baseweb="tab"]:hover { color: #0D9488 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -287,23 +290,26 @@ def get_pdf_folder_id(_drive, jahr, monat, anlegen=True, prefix="pdfs"):
 
 
 def speichere_pdfs_in_drive(_drive, pdfs, jahr, monat):
-    """Lädt alle Original-PDFs in den Monats-Unterordner (überschreibt bestehende)."""
+    """Lädt nur noch nicht abgelegte Original-PDFs in den Monats-Unterordner hoch.
+    Gibt die Anzahl neu hochgeladener PDFs zurück."""
     from googleapiclient.http import MediaIoBaseUpload
     if not pdfs:
-        return
+        return 0
     folder_id = get_pdf_folder_id(_drive, jahr, monat, anlegen=True)
+    neu = 0
     for beleg, raw in pdfs.items():
         name = f"INVOICE-{beleg}.pdf"
-        media = MediaIoBaseUpload(io.BytesIO(raw), mimetype="application/pdf")
         q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
         existing = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
         if existing:
-            _drive.files().update(fileId=existing[0]["id"], media_body=media).execute()
-        else:
-            _drive.files().create(
-                body={"name": name, "parents": [folder_id]},
-                media_body=media, fields="id",
-            ).execute()
+            continue  # bereits vorhanden → überspringen
+        media = MediaIoBaseUpload(io.BytesIO(raw), mimetype="application/pdf")
+        _drive.files().create(
+            body={"name": name, "parents": [folder_id]},
+            media_body=media, fields="id",
+        ).execute()
+        neu += 1
+    return neu
 
 
 def lade_pdfs_aus_drive(_drive, jahr, monat):
@@ -333,23 +339,26 @@ def lade_pdfs_aus_drive(_drive, jahr, monat):
 
 
 def speichere_abr_pdfs_in_drive(_drive, pdfs, jahr, monat):
-    """Speichert die Monatsabrechnungs-PDFs (dict dateiname → bytes) im Unterordner."""
+    """Speichert nur noch nicht abgelegte Monatsabrechnungs-PDFs im Unterordner.
+    Gibt die Anzahl neu hochgeladener PDFs zurück."""
     from googleapiclient.http import MediaIoBaseUpload
     if not pdfs:
-        return
+        return 0
     folder_id = get_pdf_folder_id(_drive, jahr, monat, anlegen=True, prefix="abrechnungen")
+    neu = 0
     for name, raw in pdfs.items():
         name = str(name).replace("'", "_")
-        media = MediaIoBaseUpload(io.BytesIO(raw), mimetype="application/pdf")
         q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
         existing = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
         if existing:
-            _drive.files().update(fileId=existing[0]["id"], media_body=media).execute()
-        else:
-            _drive.files().create(
-                body={"name": name, "parents": [folder_id]},
-                media_body=media, fields="id",
-            ).execute()
+            continue  # bereits vorhanden → überspringen
+        media = MediaIoBaseUpload(io.BytesIO(raw), mimetype="application/pdf")
+        _drive.files().create(
+            body={"name": name, "parents": [folder_id]},
+            media_body=media, fields="id",
+        ).execute()
+        neu += 1
+    return neu
 
 
 def lade_abr_pdfs_aus_drive(_drive, jahr, monat):
@@ -820,6 +829,59 @@ if not belege_alle and not abr:
         </div>
     </div>""", unsafe_allow_html=True)
 else:
+    # Aggregierte Monatstabelle (auch fürs Speichern benötigt)
+    df_agg = (
+        df_roh
+        .groupby("PZN", as_index=False)
+        .agg(Menge=("Menge", "sum"), Warenwert=("Warenwert", "sum"))
+        .sort_values("Warenwert", ascending=False)
+        .reset_index(drop=True)
+    )
+    st.session_state[agg_key] = df_agg
+
+    # ─── Globale Speichern-Leiste (über allen Tabs sichtbar) ───────────────────
+    def _speichern_ausfuehren():
+        abr_session    = st.session_state.get(abr_key) or {}
+        abrpdf_session = st.session_state.get(abrpdf_key) or {}
+        speichere_monat_in_drive(
+            drive, df_agg, df_roh, totals, preise, abr_session, int(jahr_auswahl), monat_auswahl
+        )
+        pdfs_session = st.session_state.get(pdf_key) or {}
+        n_neu  = speichere_pdfs_in_drive(drive, pdfs_session, int(jahr_auswahl), monat_auswahl)
+        n_neu += speichere_abr_pdfs_in_drive(drive, abrpdf_session, int(jahr_auswahl), monat_auswahl)
+        return n_neu
+
+    def _speichern_mit_feedback(prefix="✓"):
+        try:
+            with st.spinner("Speichere in Drive …"):
+                n_neu = _speichern_ausfuehren()
+            st.success(f"{prefix} Stand gespeichert ({n_neu} neue PDF(s) hochgeladen)")
+        except Exception as e:
+            st.error(f"Drive-Fehler: {e}")
+
+    confirm_key = f"gh_confirm_overwrite_{jahr_auswahl}_{monat_auswahl:02d}"
+
+    if drive:
+        _sp_l, _sp_r = st.columns([3, 1])
+        with _sp_r:
+            if st.button("💾 Aktuellen Stand speichern", use_container_width=True, type="primary"):
+                if monat_existiert_in_drive(drive, int(jahr_auswahl), monat_auswahl):
+                    st.session_state[confirm_key] = True
+                    st.rerun()
+                else:
+                    _speichern_mit_feedback()
+        if st.session_state.get(confirm_key):
+            st.warning(f"Für **{monat_label}** existiert bereits eine Speicherung in Drive. Überschreiben?")
+            _ow_l, _ow_r = st.columns([3, 1])
+            with _ow_r:
+                if st.button("Ja, überschreiben", type="primary",
+                             use_container_width=True, key=f"ow_yes_{confirm_key}"):
+                    st.session_state[confirm_key] = False
+                    _speichern_mit_feedback(prefix="✓ Überschrieben —")
+                if st.button("Abbrechen", use_container_width=True, key=f"ow_no_{confirm_key}"):
+                    st.session_state[confirm_key] = False
+                    st.rerun()
+
     tab_abgleich, tab_beleg, tab_monat = st.tabs(
         ["📑 Abgleich Monatsabrechnung", "🧾 Belegkontrolle", "📊 Monatstabelle"]
     )
@@ -1100,22 +1162,9 @@ else:
     # ════ Tab 3: Monatstabelle ════
     with tab_monat:
         if belege_alle:
-            # ─── Monatstabelle aggregieren & speichern ────────────────────────────────
-
-            st.divider()
             st.subheader(f"Monatstabelle {monat_label}")
 
-            df_agg = (
-                df_roh
-                .groupby("PZN", as_index=False)
-                .agg(Menge=("Menge", "sum"), Warenwert=("Warenwert", "sum"))
-                .sort_values("Warenwert", ascending=False)
-                .reset_index(drop=True)
-            )
-            st.session_state[agg_key] = df_agg
-
             # Healthii-EK-Bewertung: Menge × hinterlegter Preis
-            preise = st.session_state.get(preise_key) or {}
             df_disp = df_agg.copy()
             df_disp["Healthii EK Preise"] = df_disp.apply(
                 lambda r: round(r["Menge"] * preise[r["PZN"]], 2) if r["PZN"] in preise else pd.NA,
@@ -1154,63 +1203,17 @@ else:
 
             st.dataframe(styler, use_container_width=True, hide_index=True)
 
-            col_save, col_dl = st.columns(2)
-
-            def _speichern_ausfuehren():
-                abr_session    = st.session_state.get(abr_key) or {}
-                abrpdf_session = st.session_state.get(abrpdf_key) or {}
-                speichere_monat_in_drive(
-                    drive, df_agg, df_roh, totals, preise, abr_session, int(jahr_auswahl), monat_auswahl
-                )
-                pdfs_session = st.session_state.get(pdf_key) or {}
-                speichere_pdfs_in_drive(drive, pdfs_session, int(jahr_auswahl), monat_auswahl)
-                speichere_abr_pdfs_in_drive(drive, abrpdf_session, int(jahr_auswahl), monat_auswahl)
-                return len(pdfs_session)
-
-            confirm_key = f"gh_confirm_overwrite_{jahr_auswahl}_{monat_auswahl:02d}"
-
-            def _speichern_mit_feedback(prefix="✓"):
-                try:
-                    with st.spinner("Speichere in Drive … (PDFs werden hochgeladen)"):
-                        n = _speichern_ausfuehren()
-                    st.success(f"{prefix} Monatstabelle, Rohdaten und {n} PDF(s) in Drive gespeichert")
-                except Exception as e:
-                    st.error(f"Drive-Fehler: {e}")
-
-            with col_save:
-                if drive and st.button("💾 In Drive speichern", use_container_width=True, type="primary"):
-                    if monat_existiert_in_drive(drive, int(jahr_auswahl), monat_auswahl):
-                        st.session_state[confirm_key] = True   # nachfragen
-                        st.rerun()
-                    else:
-                        _speichern_mit_feedback()
-
-            # Überschreiben-Abfrage
-            if st.session_state.get(confirm_key):
-                st.warning(f"Für **{monat_label}** existiert bereits eine Speicherung in Drive. "
-                           f"Überschreiben?")
-                col_ja, col_nein = st.columns(2)
-                if col_ja.button("Ja, überschreiben", type="primary",
-                                 use_container_width=True, key=f"ow_yes_{confirm_key}"):
-                    st.session_state[confirm_key] = False
-                    _speichern_mit_feedback(prefix="✓ Überschrieben —")
-                if col_nein.button("Abbrechen", use_container_width=True, key=f"ow_no_{confirm_key}"):
-                    st.session_state[confirm_key] = False
-                    st.rerun()
-
-            with col_dl:
-                _buf = io.BytesIO()
-                with pd.ExcelWriter(_buf, engine="openpyxl") as _w:
-                    _sheet = f"Monat {monat_auswahl:02d}-{jahr_auswahl}"
-                    df_vis.to_excel(_w, index=False, sheet_name=_sheet)
-                    df_belege.to_excel(_w, index=False, sheet_name="Belegkontrolle")
-                st.download_button(
-                    label="📥 Excel herunterladen",
-                    data=_buf.getvalue(),
-                    file_name=f"gh_rechnung_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                )
+            _buf = io.BytesIO()
+            with pd.ExcelWriter(_buf, engine="openpyxl") as _w:
+                _sheet = f"Monat {monat_auswahl:02d}-{jahr_auswahl}"
+                df_vis.to_excel(_w, index=False, sheet_name=_sheet)
+                df_belege.to_excel(_w, index=False, sheet_name="Belegkontrolle")
+            st.download_button(
+                label="📥 Excel herunterladen",
+                data=_buf.getvalue(),
+                file_name=f"gh_rechnung_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
 
         else:
             st.info("Noch keine Belege für diesen Monat — links Sammelrechnungen hochladen.")
