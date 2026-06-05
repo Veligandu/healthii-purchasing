@@ -387,6 +387,11 @@ st.markdown("""
         border-radius: 10px;
         overflow: hidden;
     }
+    /* Index-Spalte im editierbaren Bestellvorschlag ausblenden */
+    [data-testid="stDataEditor"] [data-testid="glideDataEditorContainer"] .dvn-scroller .gdg-cell:first-child {
+        color: transparent !important;
+        font-size: 0 !important;
+    }
 
     /* Caption text */
     .stCaption, [data-testid="stCaptionContainer"] { color: #9CA3AF; font-size: 12px; }
@@ -812,11 +817,15 @@ with tab1:
             "Rechnungs Netto Ek Ve2":  st.column_config.NumberColumn("EK Ve2 (€)",       format="%.2f", disabled=True),
         }
 
+        # Sicherstellen dass Ve1 vorhanden ist
+        if "Ve1" not in df_display.columns and "Ve1" in df_bestellen.columns:
+            df_display.insert(3, "Ve1", df_bestellen["Ve1"])
+
         edited = st.data_editor(
-            df_display,
+            df_display.reset_index(drop=True),
             column_config=col_config,
             use_container_width=True,
-            hide_index=True,
+            hide_index=False,
             num_rows="dynamic",
             key="editor_tab1",
         )
@@ -825,7 +834,7 @@ with tab1:
         edited["Bestellwert"] = edited["Bestellmenge"] * edited["Rechnungs Netto Ek Ve1"]
 
         if st.button("💾 Änderungen übernehmen", type="primary"):
-            st.session_state.df_bestellen_edit = edited.copy()
+            st.session_state.df_bestellen_edit = edited.reset_index(drop=True).copy()
             st.success("✓ Änderungen übernommen")
 
         st.divider()
