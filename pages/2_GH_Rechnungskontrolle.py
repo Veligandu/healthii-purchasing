@@ -300,9 +300,10 @@ def lade_pdfs_aus_drive(_drive, jahr, monat):
 
 # Zeilenmuster: Lagerort  Menge  [Einheit/Name...]  [V-Dat]  Pos  PZN
 #               VP_mit_MWSt  EK_ohne_MWSt  Warenwert_ohne_MWSt  CODE  S
-# CODE = zweistelliger Warencode (FA, OA, FO, FE, … ggf. durch Leerzeichen getrennt)
+# CODE = Warencode (FA, OA, FO, FE, FAE, … unterschiedlich lang, ggf. mit Leerzeichen);
+#        wir verlangen nach dem Warenwert nur noch einen Großbuchstaben als Bestätigung.
 _ZEILEN_RE = re.compile(
-    r"^\s*\d+\s+\d+\s+(\d+)\s+.+?\b(\d{8})\b\s+[\d,]+\s+([\d,]+)\s+([\d,]+)\s+[A-Z]\s?[A-Z]\b",
+    r"^\s*\d+\s+\d+\s+(\d+)\s+.+?\b(\d{8})\b\s+[\d,]+\s+([\d,]+)\s+([\d,]+)\s+[A-Z]",
     re.MULTILINE,
 )
 # Rechnungssumme: letzte Zahl vor "DAFUE" in der Summenzeile
