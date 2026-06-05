@@ -291,7 +291,7 @@ st.markdown("""
     }
     .stDownloadButton > button:hover { background: #0B7A70; }
 
-    /* File Uploader */
+    /* File Uploader – "+" Button ausblenden */
     [data-testid="stFileUploader"] {
         border: 2px dashed #D1D5DB;
         border-radius: 12px;
@@ -299,6 +299,8 @@ st.markdown("""
         padding: 8px;
     }
     [data-testid="stFileUploader"]:hover { border-color: #0D9488; }
+    [data-testid="stFileUploaderDropzone"] button[kind="secondary"] { display: none !important; }
+    [data-testid="stFileUploaderDropzoneInstructions"] > div > span { display: none !important; }
 
     /* Divider */
     hr { border-color: #E5E7EB; }
@@ -495,15 +497,19 @@ with st.sidebar:
                         pass
                 # Algorithmus-Einstellungen aus Session State übernehmen
                 from purchasing_agent import CONFIG as _CONFIG
-                _CONFIG["gewichtung_l30"] = st.session_state.get("algo_w30", 0.7)
-                _CONFIG["gewichtung_l90"] = st.session_state.get("algo_w90", 0.3)
-                _CONFIG["ziel_tage"]      = st.session_state.get("algo_ziel_tage", 60)
-                _CONFIG["mbw_standard"]   = st.session_state.get("algo_mbw_standard", 2000.0)
+                _CONFIG["gewichtung_l30"]             = st.session_state.get("algo_w30", 0.7)
+                _CONFIG["gewichtung_l90"]             = st.session_state.get("algo_w90", 0.3)
+                _CONFIG["ziel_tage"]                  = st.session_state.get("algo_ziel_tage", 60)
+                _CONFIG["mbw_standard"]               = st.session_state.get("algo_mbw_standard", 2000.0)
+                _CONFIG["kritische_positionsgroesse"] = st.session_state.get("algo_krit_pos", 0.0)
+                _CONFIG["mindestreichweite"]          = st.session_state.get("algo_mindestreichweite", 30)
 
                 ergebnis = berechne_bestellvorschlag(
                     st.session_state.excel_bytes_input, letzte_bestellung_df, mbw_ausnahmen
                 )
-                st.session_state.ergebnis = ergebnis
+                from datetime import datetime as _dt
+                st.session_state.ergebnis            = ergebnis
+                st.session_state.ergebnis_timestamp  = _dt.now().strftime("%d.%m.%Y %H:%M:%S")
                 if not ergebnis["bestellen"].empty:
                     st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
                 else:
@@ -598,6 +604,31 @@ with tab1:
         )
         st.session_state["algo_mbw_standard"] = float(mbw_std)
 
+        st.divider()
+        st.markdown("**Kritische Positionsgröße**")
+        st.caption("Ist der Bestellwert einer einzelnen Position größer als der Grenzwert, wird die Menge um eine Ve reduziert — solange die Mindestreichweite noch erfüllt ist.")
+        col_c, col_d = st.columns(2)
+        with col_c:
+            krit = st.number_input(
+                "Grenzwert je Position (€)",
+                min_value=0, max_value=100000,
+                value=int(st.session_state.get("algo_krit_pos", 0)),
+                step=100,
+                help="0 = deaktiviert",
+            )
+            st.session_state["algo_krit_pos"] = float(krit)
+        with col_d:
+            mind_rw = st.number_input(
+                "Mindestreichweite (Tage)",
+                min_value=0, max_value=365,
+                value=int(st.session_state.get("algo_mindestreichweite", 30)),
+                step=5,
+                help="Reduzierung nur wenn Reichweite danach noch ≥ diesem Wert",
+            )
+            st.session_state["algo_mindestreichweite"] = int(mind_rw)
+        if krit > 0:
+            st.caption(f"→ Position > {krit:,.0f} € → Ve reduzieren, falls Reichweite noch ≥ {mind_rw} Tage")
+
     st.divider()
 
     if ergebnis is None:
@@ -611,11 +642,6 @@ with tab1:
     elif df_bestellen is None or df_bestellen.empty:
         st.info("Keine Bestellungen über MBW.")
     else:
-        with st.expander("🔍 Berechnungslog"):
-            for eintrag in ergebnis["log"]:
-                farbe = "green" if "✓" in eintrag else "red"
-                st.markdown(f"<span style='color:{farbe}'>{eintrag}</span>", unsafe_allow_html=True)
-
         st.subheader("Bestellmengen anpassen")
         st.caption("Nur die Spalte **Bestellmenge** ist editierbar. Bestellwert aktualisiert sich automatisch.")
 
@@ -657,6 +683,17 @@ with tab1:
         edited["Bestellwert"] = edited["Bestellmenge"] * edited["Rechnungs Netto Ek Ve1"]
         st.session_state.df_bestellen_edit.loc[edited.index, "Bestellmenge"] = edited["Bestellmenge"]
         st.session_state.df_bestellen_edit.loc[edited.index, "Bestellwert"]  = edited["Bestellwert"]
+
+        st.divider()
+
+        # Berechnungslog mit Timestamp
+        with st.expander("🔍 Berechnungslog"):
+            _ts = st.session_state.get("ergebnis_timestamp", "")
+            if _ts:
+                st.caption(f"Berechnet am {_ts}")
+            for eintrag in ergebnis["log"]:
+                farbe = "green" if "✓" in eintrag else ("orange" if "⚙" in eintrag else "red")
+                st.markdown(f"<span style='color:{farbe}'>{eintrag}</span>", unsafe_allow_html=True)
 
         st.divider()
 
