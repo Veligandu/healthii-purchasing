@@ -943,25 +943,23 @@ with tab1:
 
         st.divider()
 
-        # Excel vorbereiten
-        ergebnis_export = dict(ergebnis)
-        _df_export = st.session_state.df_bestellen_edit.copy()
-        # MBW per Hersteller wiederherstellen (robust gegen gelöschte Zeilen)
-        _df_export = _stelle_mbw_wieder_her(_df_export, ergebnis)
-        ergebnis_export["bestellen"] = _df_export
-        excel_out = erstelle_bestellsheet(ergebnis_export, kw, year)
-
         col_dl, col_save = st.columns(2)
 
         with col_dl:
-            if excel_out:
+            if st.button("📥 Purchase-Order herunterladen", use_container_width=True, type="primary"):
+                with st.spinner("Erstelle Excel …"):
+                    ergebnis_export = dict(ergebnis)
+                    _df_export = _stelle_mbw_wieder_her(
+                        st.session_state.df_bestellen_edit.copy(), ergebnis
+                    )
+                    ergebnis_export["bestellen"] = _df_export
+                    excel_out = erstelle_bestellsheet(ergebnis_export, kw, year)
                 st.download_button(
-                    label="📥 Purchase-Order herunterladen",
+                    label="💾 Datei speichern",
                     data=excel_out,
                     file_name=f"Purchase-Order-KW{kw:02d}-{year}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
-                    type="primary",
                 )
 
         with col_save:
