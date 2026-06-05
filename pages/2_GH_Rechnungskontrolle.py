@@ -740,13 +740,20 @@ pdf_key    = f"gh_pdfs_{jahr_auswahl}_{monat_auswahl:02d}"   # Original-PDF-Byte
 preise_key = f"gh_preise_{jahr_auswahl}_{monat_auswahl:02d}" # PZN → Healthii-EK-Preis
 abr_key    = f"gh_abr_{jahr_auswahl}_{monat_auswahl:02d}"    # Rechnungsnr → Betrag laut Abrechnung
 abrpdf_key = f"gh_abrpdfs_{jahr_auswahl}_{monat_auswahl:02d}" # Abrechnungs-PDFs (dateiname → bytes)
-report_key = f"gh_report_{jahr_auswahl}_{monat_auswahl:02d}"  # Freitext-Report zum Monat
+report_key = f"gh_report_{jahr_auswahl}_{monat_auswahl:02d}"   # persistenter Report-Wert
+rep_wkey   = f"report_input_{jahr_auswahl}_{monat_auswahl:02d}" # Widget-Key des Textfelds
 
 for k in [roh_key, totals_key, agg_key, pdf_key, preise_key, abr_key, abrpdf_key]:
     if k not in st.session_state:
         st.session_state[k] = None
 if report_key not in st.session_state:
     st.session_state[report_key] = ""
+
+
+def _report_sichern():
+    """Aktuellen Textfeld-Wert in den persistenten Key übernehmen (vor rerun/Speichern)."""
+    if rep_wkey in st.session_state:
+        st.session_state[report_key] = st.session_state[rep_wkey] or ""
 
 # ─── Gespeicherten Monat automatisch aus Drive laden (einmalig je Monat) ──────
 
@@ -894,6 +901,7 @@ else:
         _sp_l, _sp_r = st.columns([3, 1])
         with _sp_r:
             if st.button("💾 Aktuellen Stand speichern", use_container_width=True, type="primary"):
+                _report_sichern()   # Textfeld-Wert sichern, bevor evtl. rerun das Widget verwirft
                 if monat_existiert_in_drive(drive, int(jahr_auswahl), monat_auswahl):
                     st.session_state[confirm_key] = True
                     st.rerun()
@@ -1303,21 +1311,19 @@ else:
 
             st.divider()
             st.markdown(f"##### Report {monat_label}")
-            _rep_wkey = f"report_input_{jahr_auswahl}_{monat_auswahl:02d}"
-            if _rep_wkey not in st.session_state:
-                st.session_state[_rep_wkey] = st.session_state.get(report_key, "") or ""
-
-            def _sync_report():
-                st.session_state[report_key] = st.session_state[_rep_wkey]
+            if rep_wkey not in st.session_state:
+                st.session_state[rep_wkey] = st.session_state.get(report_key, "") or ""
 
             st.text_area(
                 "Notizen / Report zum Monat",
-                key=_rep_wkey,
-                on_change=_sync_report,
+                key=rep_wkey,
+                on_change=_report_sichern,
                 height=200,
                 placeholder="Auffälligkeiten, Klärungen, offene Punkte zum Monat …",
                 label_visibility="collapsed",
             )
+            # Bei jedem Render den aktuellen Wert in den persistenten Key übernehmen
+            _report_sichern()
             st.caption("Wird mit „💾 Aktuellen Stand speichern“ oben in Drive gesichert.")
 
         else:
