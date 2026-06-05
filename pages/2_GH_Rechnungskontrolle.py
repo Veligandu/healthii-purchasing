@@ -1303,9 +1303,17 @@ else:
 
             st.divider()
             st.markdown(f"##### Report {monat_label}")
+            _rep_wkey = f"report_input_{jahr_auswahl}_{monat_auswahl:02d}"
+            if _rep_wkey not in st.session_state:
+                st.session_state[_rep_wkey] = st.session_state.get(report_key, "") or ""
+
+            def _sync_report():
+                st.session_state[report_key] = st.session_state[_rep_wkey]
+
             st.text_area(
                 "Notizen / Report zum Monat",
-                key=report_key,
+                key=_rep_wkey,
+                on_change=_sync_report,
                 height=200,
                 placeholder="Auffälligkeiten, Klärungen, offene Punkte zum Monat …",
                 label_visibility="collapsed",
