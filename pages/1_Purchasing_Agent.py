@@ -651,42 +651,35 @@ with tab1:
         st.caption("Änderungen werden sofort gespeichert und beim nächsten **Berechnen** angewendet.")
         col_a, col_b = st.columns(2)
         with col_a:
-            w30_pct = st.slider(
+            _w30_neu = st.slider(
                 "Gewichtung L30",
                 min_value=0, max_value=100,
                 value=int(st.session_state.get("algo_w30", 0.7) * 100),
                 step=10, format="%d%%",
                 help="Anteil der letzten 30 Tage am Tagesverbrauch",
-                key="_slider_w30",
-                on_change=lambda: (
-                    st.session_state.update({
-                        "algo_w30": st.session_state["_slider_w30"] / 100,
-                        "algo_w90": 1 - st.session_state["_slider_w30"] / 100,
-                    }) or _auto_save_algo()
-                ),
             )
-            st.session_state["algo_w30"] = w30_pct / 100
-            st.session_state["algo_w90"] = 1 - w30_pct / 100
-            st.caption(f"→ Tagesverbrauch = **{w30_pct}% × L30/30** + **{100-w30_pct}% × L90/90**")
+            st.session_state["algo_w30"] = _w30_neu / 100
+            st.session_state["algo_w90"] = 1 - _w30_neu / 100
+            st.caption(f"→ Tagesverbrauch = **{_w30_neu}% × L30/30** + **{100-_w30_neu}% × L90/90**")
 
         with col_b:
-            st.number_input(
+            _ziel_neu = st.number_input(
                 "Ziel-Reichweite (Tage)",
                 min_value=7, max_value=365,
+                value=int(st.session_state.get("algo_ziel_tage", 60)),
                 step=5,
                 help="Wie viele Tage soll der Bestand nach der Bestellung reichen?",
-                key="algo_ziel_tage",
-                on_change=_auto_save_algo,
             )
+            st.session_state["algo_ziel_tage"] = int(_ziel_neu)
 
-        st.number_input(
+        _mbw_neu = st.number_input(
             "Standard-MBW (€)",
             min_value=0, max_value=50000,
+            value=int(st.session_state.get("algo_mbw_standard", 2000)),
             step=100,
             help="Gilt für alle Hersteller ohne eigenen Eintrag unten",
-            key="algo_mbw_standard",
-            on_change=_auto_save_algo,
         )
+        st.session_state["algo_mbw_standard"] = float(_mbw_neu)
 
         # MBW-Ausnahmen Tabelle
         st.caption("**Hersteller-Ausnahmen (mbw_exceptions.csv)**")
@@ -745,27 +738,38 @@ with tab1:
         st.caption("Ist der Bestellwert einer einzelnen Position größer als der Grenzwert, wird die Menge um eine Ve reduziert — solange die Mindestreichweite noch erfüllt ist.")
         col_c, col_d = st.columns(2)
         with col_c:
-            st.number_input(
+            _krit_neu = st.number_input(
                 "Grenzwert je Position (€)",
                 min_value=0, max_value=100000,
+                value=int(st.session_state.get("algo_krit_pos", 0)),
                 step=100,
                 help="0 = deaktiviert",
-                key="algo_krit_pos",
-                on_change=_auto_save_algo,
             )
+            st.session_state["algo_krit_pos"] = float(_krit_neu)
         with col_d:
-            st.number_input(
+            _mind_neu = st.number_input(
                 "Mindestreichweite (Tage)",
                 min_value=0, max_value=365,
+                value=int(st.session_state.get("algo_mindestreichweite", 30)),
                 step=5,
                 help="Mindestreichweite die nach Reduktion noch erfüllt sein muss",
-                key="algo_mindestreichweite",
-                on_change=_auto_save_algo,
             )
+            st.session_state["algo_mindestreichweite"] = int(_mind_neu)
         _krit = st.session_state.get("algo_krit_pos", 0)
         _mind = st.session_state.get("algo_mindestreichweite", 30)
         if _krit > 0:
             st.caption(f"→ Position > {_krit:,.0f} € → Minimum für {_mind} Tage Reichweite bestellen")
+
+        # Speichern-Button
+        if st.button("💾 Einstellungen speichern", use_container_width=True, type="primary"):
+            if st.session_state.get("drive"):
+                try:
+                    _auto_save_algo()
+                    st.success("✓ Gespeichert")
+                except Exception as _e:
+                    st.error(f"Fehler: {_e}")
+            else:
+                st.warning("Drive nicht verbunden")
 
     st.divider()
 
