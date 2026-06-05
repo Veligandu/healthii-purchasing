@@ -449,14 +449,15 @@ with st.sidebar:
         "wiederbestellung.xlsx hochladen",
         type=["xlsx"],
         help="Metabase-Export hierher ziehen oder auswählen",
+        accept_multiple_files=False,
+        label_visibility="collapsed",
     )
 
+    # Datei in Drive speichern (ohne Berechnung)
     if uploaded:
-        # Nur berechnen wenn eine NEUE Datei hochgeladen wurde
         if st.session_state.get("uploaded_filename") != uploaded.name:
             excel_bytes = uploaded.read()
-            with st.spinner("Lade hoch & berechne …"):
-                # Sofort in Drive speichern
+            with st.spinner("Speichere …"):
                 if st.session_state.drive:
                     try:
                         stammdaten_id = get_stammdaten_folder_id(st.session_state.drive)
@@ -467,39 +468,19 @@ with st.sidebar:
                         )
                     except Exception:
                         pass
+            st.session_state.excel_bytes_input = excel_bytes
+            st.session_state.uploaded_filename = uploaded.name
+            st.session_state.ergebnis          = None
+            st.session_state.df_bestellen_edit = None
+        st.caption(f"✅ {uploaded.name}")
 
-                letzte_bestellung_df = lade_letzte_bestellung_fuer_berechnung(st.session_state.drive)
-                mbw_ausnahmen = {}
-                if st.session_state.drive:
-                    try:
-                        mbw_df = download_csv_from_drive(
-                            st.session_state.drive, "mbw_exceptions.csv", stammdaten_id
-                        )
-                        if mbw_df is not None:
-                            mbw_ausnahmen = dict(zip(mbw_df["Hersteller"], mbw_df["MBW"]))
-                    except Exception:
-                        pass
-                ergebnis = berechne_bestellvorschlag(excel_bytes, letzte_bestellung_df, mbw_ausnahmen)
-                st.session_state.ergebnis          = ergebnis
-                st.session_state.excel_bytes_input = excel_bytes
-                st.session_state.uploaded_filename = uploaded.name
-                if not ergebnis["bestellen"].empty:
-                    st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
-                else:
-                    st.session_state.df_bestellen_edit = pd.DataFrame()
-            st.success(f"✓ {uploaded.name} (in Drive gespeichert)")
-        else:
-            st.success(f"✓ {uploaded.name}")
-
-    # Auto-geladene Datei anzeigen
     elif st.session_state.get("uploaded_filename"):
-        st.success(f"✓ {st.session_state.uploaded_filename} (aus Drive)")
+        st.caption(f"✅ {st.session_state.uploaded_filename} (aus Drive)")
 
-    # Neu berechnen — immer sichtbar wenn eine Datei geladen ist
+    # Berechnen-Button
     if st.session_state.get("excel_bytes_input"):
-        if st.button("🔄 Neu berechnen", use_container_width=True,
-                     help="Bestellvorschlag mit aktualisierter Bestellhistorie neu berechnen"):
-            with st.spinner("Berechne neu …"):
+        if st.button("▶ Berechnen", use_container_width=True, type="primary"):
+            with st.spinner("Berechne …"):
                 letzte_bestellung_df = lade_letzte_bestellung_fuer_berechnung(st.session_state.drive)
                 mbw_ausnahmen = {}
                 if st.session_state.drive:
@@ -512,6 +493,13 @@ with st.sidebar:
                             mbw_ausnahmen = dict(zip(mbw_df["Hersteller"], mbw_df["MBW"]))
                     except Exception:
                         pass
+                # Algorithmus-Einstellungen aus Session State übernehmen
+                from purchasing_agent import CONFIG as _CONFIG
+                _CONFIG["gewichtung_l30"] = st.session_state.get("algo_w30", 0.7)
+                _CONFIG["gewichtung_l90"] = st.session_state.get("algo_w90", 0.3)
+                _CONFIG["ziel_tage"]      = st.session_state.get("algo_ziel_tage", 60)
+                _CONFIG["mbw_standard"]   = st.session_state.get("algo_mbw_standard", 2000.0)
+
                 ergebnis = berechne_bestellvorschlag(
                     st.session_state.excel_bytes_input, letzte_bestellung_df, mbw_ausnahmen
                 )
@@ -520,7 +508,6 @@ with st.sidebar:
                     st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
                 else:
                     st.session_state.df_bestellen_edit = pd.DataFrame()
-            st.success("✓ Neu berechnet")
             st.rerun()
 
     st.divider()
@@ -576,12 +563,49 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # ══════════════════════════════════════════════════════════════════════════════
 
 with tab1:
+    # ── Algorithmus-Einstellungen ──────────────────────────────────────────────
+    with st.expander("⚙️ Algorithmus"):
+        st.caption("Einstellungen werden beim nächsten Klick auf **Berechnen** übernommen.")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            w30_pct = st.slider(
+                "Gewichtung L30",
+                min_value=0, max_value=100,
+                value=int(st.session_state.get("algo_w30", 0.7) * 100),
+                step=10, format="%d%%",
+                help="Anteil der letzten 30 Tage am Tagesverbrauch",
+            )
+            st.session_state["algo_w30"] = w30_pct / 100
+            st.session_state["algo_w90"] = 1 - w30_pct / 100
+            st.caption(f"→ Tagesverbrauch = **{w30_pct}% × L30/30** + **{100-w30_pct}% × L90/90**")
+
+        with col_b:
+            ziel = st.number_input(
+                "Ziel-Reichweite (Tage)",
+                min_value=7, max_value=365,
+                value=int(st.session_state.get("algo_ziel_tage", 60)),
+                step=5,
+                help="Wie viele Tage soll der Bestand nach der Bestellung reichen?",
+            )
+            st.session_state["algo_ziel_tage"] = ziel
+
+        mbw_std = st.number_input(
+            "Standard-MBW (€)",
+            min_value=0, max_value=50000,
+            value=int(st.session_state.get("algo_mbw_standard", 2000)),
+            step=100,
+            help="Mindestbestellwert pro Hersteller. Ausnahmen: Drive → Stammdaten → mbw_exceptions.csv",
+        )
+        st.session_state["algo_mbw_standard"] = float(mbw_std)
+
+    st.divider()
+
     if ergebnis is None:
         st.markdown("""
         <div style='text-align:center;padding:60px 0;color:#9CA3AF;'>
             <div style='font-size:48px;'>📄</div>
             <div style='font-size:16px;margin-top:12px;'>
-                Bitte <b>wiederbestellung.xlsx</b> in der Seitenleiste hochladen
+                Datei hochladen und <b>Berechnen</b> klicken
             </div>
         </div>""", unsafe_allow_html=True)
     elif df_bestellen is None or df_bestellen.empty:
