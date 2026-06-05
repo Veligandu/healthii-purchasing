@@ -975,15 +975,22 @@ with tab1:
                         # Bestellhistorie speichern (lokal + Drive)
                         speichere_historie(ergebnis["df_input"], df_final, drive_conn)
 
+                        # Excel aus Session State oder neu erstellen
+                        _excel_bytes = st.session_state.get("excel_out")
+                        if not _excel_bytes:
+                            ergebnis_export = dict(ergebnis)
+                            ergebnis_export["bestellen"] = _stelle_mbw_wieder_her(df_final.copy(), ergebnis)
+                            _excel_bytes = erstelle_bestellsheet(ergebnis_export, kw, year)
+
                         # Purchase-Order lokal speichern + Drive
                         order_name = f"Purchase-Order-KW{kw:02d}-{year}.xlsx"
                         order_path = os.path.join(BASE_DIR, order_name)
                         with open(order_path, "wb") as f:
-                            f.write(excel_out)
+                            f.write(_excel_bytes)
                         if drive_conn:
                             week_folder_id = get_week_folder_id(drive_conn, kw, year)
                             upload_bytes_to_drive(
-                                drive_conn, excel_out, order_name, week_folder_id,
+                                drive_conn, _excel_bytes, order_name, week_folder_id,
                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             )
                             st.success(f"✓ Lokal & Drive gespeichert: {order_name}")
