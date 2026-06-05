@@ -1200,6 +1200,14 @@ else:
 
             df_vis = df_disp.drop(columns=["_unbewertet"])
 
+            summe_ww = df_vis["Warenwert"].sum()
+            summe_hk = pd.to_numeric(df_vis["Healthii EK Preise"], errors="coerce").sum()
+            mc1, mc2 = st.columns(2)
+            mc1.metric("Warenwert GH-Rechnungen", f"{summe_ww:,.2f} €")
+            mc2.metric("Summe Healthii-EK-Preise",
+                       f"{summe_hk:,.2f} €" if preise else "—")
+            st.divider()
+
             def _zeilen_stil(row):
                 gelb = "background-color: #FEF9C3"
                 return [gelb if pd.isna(row["Healthii EK Preise"]) else "" for _ in row]
