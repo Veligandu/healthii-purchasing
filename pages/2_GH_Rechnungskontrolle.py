@@ -181,7 +181,7 @@ def lade_monat_aus_drive(_drive, jahr, monat):
         res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
         files = res.get("files", [])
         if not files:
-            return None, {}, {}, {}
+            return None, {}, {}, {}, ""
         buf = io.BytesIO()
         dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=files[0]["id"]))
         done = False
@@ -209,9 +209,15 @@ def lade_monat_aus_drive(_drive, jahr, monat):
                 if datum is not None:
                     datum = str(datum)[:10]
                 abr[str(r["Rechnungsnr"])] = {"datum": datum, "betrag": r["Betrag"]}
-        return df_roh, totals, preise, abr
+        report = ""
+        if "Report" in xls.sheet_names:
+            df_rep = pd.read_excel(xls, "Report")
+            if not df_rep.empty and "Report" in df_rep.columns:
+                v = df_rep["Report"].iloc[0]
+                report = "" if pd.isna(v) else str(v)
+        return df_roh, totals, preise, abr, report
     except Exception:
-        return None, {}, {}, {}
+        return None, {}, {}, {}, ""
 
 
 def monat_existiert_in_drive(_drive, jahr, monat):
@@ -226,8 +232,8 @@ def monat_existiert_in_drive(_drive, jahr, monat):
         return False
 
 
-def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, preise, abr, jahr, monat):
-    """Speichert Monatstabelle + Rohdaten + Summen + Preise + Abrechnung als Excel in Drive."""
+def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, preise, abr, report, jahr, monat):
+    """Speichert Monatstabelle + Rohdaten + Summen + Preise + Abrechnung + Report als Excel."""
     from googleapiclient.http import MediaIoBaseUpload
     folder_id = get_gh_folder_id(_drive)
     name = f"gh_rechnung_{jahr}_{monat:02d}.xlsx"
@@ -252,6 +258,8 @@ def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, preise, abr, jahr, 
             df_preise.to_excel(w, index=False, sheet_name="Preise")
         if not df_abr.empty:
             df_abr.to_excel(w, index=False, sheet_name="Abrechnung")
+        if report:
+            pd.DataFrame({"Report": [report]}).to_excel(w, index=False, sheet_name="Report")
     buf.seek(0)
     media = MediaIoBaseUpload(
         buf,
@@ -732,17 +740,20 @@ pdf_key    = f"gh_pdfs_{jahr_auswahl}_{monat_auswahl:02d}"   # Original-PDF-Byte
 preise_key = f"gh_preise_{jahr_auswahl}_{monat_auswahl:02d}" # PZN → Healthii-EK-Preis
 abr_key    = f"gh_abr_{jahr_auswahl}_{monat_auswahl:02d}"    # Rechnungsnr → Betrag laut Abrechnung
 abrpdf_key = f"gh_abrpdfs_{jahr_auswahl}_{monat_auswahl:02d}" # Abrechnungs-PDFs (dateiname → bytes)
+report_key = f"gh_report_{jahr_auswahl}_{monat_auswahl:02d}"  # Freitext-Report zum Monat
 
 for k in [roh_key, totals_key, agg_key, pdf_key, preise_key, abr_key, abrpdf_key]:
     if k not in st.session_state:
         st.session_state[k] = None
+if report_key not in st.session_state:
+    st.session_state[report_key] = ""
 
 # ─── Gespeicherten Monat automatisch aus Drive laden (einmalig je Monat) ──────
 
 load_flag = f"gh_loaded_{jahr_auswahl}_{monat_auswahl:02d}"
 if drive and st.session_state[roh_key] is None and not st.session_state.get(load_flag):
     if monat_existiert_in_drive(drive, int(jahr_auswahl), monat_auswahl):
-        df_roh_drive, totals_drive, preise_drive, abr_drive = lade_monat_aus_drive(
+        df_roh_drive, totals_drive, preise_drive, abr_drive, report_drive = lade_monat_aus_drive(
             drive, int(jahr_auswahl), monat_auswahl
         )
         st.session_state[roh_key] = (
@@ -752,6 +763,7 @@ if drive and st.session_state[roh_key] is None and not st.session_state.get(load
         st.session_state[totals_key] = totals_drive
         st.session_state[preise_key] = preise_drive
         st.session_state[abr_key]    = abr_drive
+        st.session_state[report_key] = report_drive
         st.session_state[pdf_key]    = lade_pdfs_aus_drive(drive, int(jahr_auswahl), monat_auswahl)
         st.session_state[abrpdf_key] = lade_abr_pdfs_aus_drive(drive, int(jahr_auswahl), monat_auswahl)
     st.session_state[load_flag] = True
@@ -858,8 +870,10 @@ else:
     def _speichern_ausfuehren():
         abr_session    = st.session_state.get(abr_key) or {}
         abrpdf_session = st.session_state.get(abrpdf_key) or {}
+        report_session = st.session_state.get(report_key) or ""
         speichere_monat_in_drive(
-            drive, df_agg, df_roh, totals, preise, abr_session, int(jahr_auswahl), monat_auswahl
+            drive, df_agg, df_roh, totals, preise, abr_session, report_session,
+            int(jahr_auswahl), monat_auswahl
         )
         pdfs_session = st.session_state.get(pdf_key) or {}
         n_neu  = speichere_pdfs_in_drive(drive, pdfs_session, int(jahr_auswahl), monat_auswahl)
@@ -1286,6 +1300,17 @@ else:
                 file_name=f"gh_rechnung_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
+            st.divider()
+            st.markdown(f"##### Report {monat_label}")
+            st.text_area(
+                "Notizen / Report zum Monat",
+                key=report_key,
+                height=200,
+                placeholder="Auffälligkeiten, Klärungen, offene Punkte zum Monat …",
+                label_visibility="collapsed",
+            )
+            st.caption("Wird mit „💾 Aktuellen Stand speichern“ oben in Drive gesichert.")
 
         else:
             st.info("Noch keine Belege für diesen Monat — links Sammelrechnungen hochladen.")
