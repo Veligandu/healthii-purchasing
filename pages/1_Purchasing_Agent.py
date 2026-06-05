@@ -157,6 +157,21 @@ def speichere_algo_config(drive, config: dict):
         ).execute()
 
 
+def _stelle_mbw_wieder_her(df: pd.DataFrame, ergebnis: dict) -> pd.DataFrame:
+    """Stellt die MBW-Spalte in df wieder her, falls sie fehlt — per Hersteller-Mapping."""
+    if "MBW" in df.columns:
+        return df
+    df = df.copy()
+    _ref = ergebnis.get("bestellen", pd.DataFrame())
+    if "MBW" in _ref.columns and "Hersteller" in _ref.columns and "Hersteller" in df.columns:
+        _mbw_map = _ref.drop_duplicates("Hersteller").set_index("Hersteller")["MBW"]
+        df["MBW"] = df["Hersteller"].map(_mbw_map)
+    if "MBW" not in df.columns or df["MBW"].isna().any():
+        from purchasing_agent import CONFIG as _C
+        df["MBW"] = df.get("MBW", pd.Series(dtype=float)).fillna(_C.get("mbw_standard", 2000.0))
+    return df
+
+
 def speichere_historie(df_input, df_bestellen, drive=None):
     """Speichert Bestellhistorie lokal und/oder in Drive."""
     historie_name, historie_pfad = speichere_bestellhistorie(df_input, df_bestellen)
@@ -838,8 +853,17 @@ with tab1:
         _markiert = edited["🗑"].sum()
         _btn_label = f"💾 Änderungen übernehmen{f'  ({_markiert} Zeile(n) löschen)' if _markiert else ''}"
         if st.button(_btn_label, type="primary"):
-            df_saved = edited[~edited["🗑"]].drop(columns=["🗑"]).reset_index(drop=True)
-            st.session_state.df_bestellen_edit = df_saved.copy()
+            _delete_idx = edited.index[edited["🗑"]].tolist()
+            _df_full = st.session_state.df_bestellen_edit.copy()
+            # Bestellmenge + Bestellwert zurückschreiben
+            for _i in edited.index[~edited["🗑"]]:
+                if _i in _df_full.index:
+                    _df_full.at[_i, "Bestellmenge"] = edited.at[_i, "Bestellmenge"]
+                    _df_full.at[_i, "Bestellwert"]  = edited.at[_i, "Bestellwert"]
+            # Gelöschte Zeilen entfernen
+            _df_full = _df_full.drop(index=_delete_idx).reset_index(drop=True)
+            _df_full = _stelle_mbw_wieder_her(_df_full, ergebnis)
+            st.session_state.df_bestellen_edit = _df_full
             st.success(f"✓ Übernommen{f' — {_markiert} Position(en) entfernt' if _markiert else ''}")
             st.rerun()
 
@@ -921,7 +945,10 @@ with tab1:
 
         # Excel vorbereiten
         ergebnis_export = dict(ergebnis)
-        ergebnis_export["bestellen"] = st.session_state.df_bestellen_edit
+        _df_export = st.session_state.df_bestellen_edit.copy()
+        # MBW per Hersteller wiederherstellen (robust gegen gelöschte Zeilen)
+        _df_export = _stelle_mbw_wieder_her(_df_export, ergebnis)
+        ergebnis_export["bestellen"] = _df_export
         excel_out = erstelle_bestellsheet(ergebnis_export, kw, year)
 
         col_dl, col_save = st.columns(2)

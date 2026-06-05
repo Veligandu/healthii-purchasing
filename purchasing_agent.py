@@ -479,7 +479,7 @@ def erstelle_bestellsheet(ergebnis: dict, kw: int, year: int) -> bytes:
 
         summen_fill = PatternFill('solid', fgColor=HEALTHII_GRUEN)
         summen_font = Font(bold=True, color=WEISS, name='Arial', size=10)
-        mbw_val = grp['MBW'].iloc[0]
+        mbw_val = grp['MBW'].iloc[0] if 'MBW' in grp.columns else CONFIG.get('mbw_standard', 2000.0)
         for col_idx in range(1, len(spalten) + 1):
             cell = ws.cell(row=row, column=col_idx, value='')
             cell.fill = summen_fill
@@ -559,8 +559,8 @@ def erstelle_bestellsheet(ergebnis: dict, kw: int, year: int) -> bytes:
                 row2 += 1
 
             # Summenzeile mit MBW- und Fehlbetrag-Hinweis
-            mbw_val     = grp['MBW'].iloc[0]
-            fehlbetrag  = grp['Fehlbetrag'].iloc[0]
+            mbw_val    = grp['MBW'].iloc[0] if 'MBW' in grp.columns else CONFIG.get('mbw_standard', 2000.0)
+            fehlbetrag = grp['Fehlbetrag'].iloc[0] if 'Fehlbetrag' in grp.columns else 0.0
             summen_fill2 = PatternFill('solid', fgColor='C0392B')   # Rot für Unter-MBW
             summen_font2 = Font(bold=True, color=WEISS, name='Arial', size=10)
             for col_idx in range(1, len(spalten) + 1):
