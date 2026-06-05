@@ -201,7 +201,11 @@ def lade_monat_aus_drive(_drive, jahr, monat):
         abr = {}
         if "Abrechnung" in xls.sheet_names:
             df_a = pd.read_excel(xls, "Abrechnung", dtype={"Rechnungsnr": str})
-            abr = dict(zip(df_a["Rechnungsnr"], df_a["Betrag"]))
+            for _, r in df_a.iterrows():
+                datum = r["Datum"] if "Datum" in df_a.columns and pd.notna(r["Datum"]) else None
+                if datum is not None:
+                    datum = str(datum)[:10]
+                abr[str(r["Rechnungsnr"])] = {"datum": datum, "betrag": r["Betrag"]}
         return df_roh, totals, preise, abr
     except Exception:
         return None, {}, {}, {}
@@ -231,7 +235,8 @@ def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, preise, abr, jahr, 
         [{"PZN": p, "Preis": v} for p, v in (preise or {}).items()]
     )
     df_abr = pd.DataFrame(
-        [{"Rechnungsnr": n, "Betrag": b} for n, b in (abr or {}).items()]
+        [{"Rechnungsnr": n, "Datum": _abr_norm(v)[0], "Betrag": _abr_norm(v)[1]}
+         for n, v in (abr or {}).items()]
     )
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
@@ -521,16 +526,28 @@ _ABR_RE = re.compile(
 
 def parse_abrechnung(datei_bytes: bytes) -> dict:
     """Liest aus einer Phoenix-Monatsabrechnung die abgerechneten Rechnungsnummern.
-    Gibt {rechnungsnr(str): gesamtbetrag(float)} zurück."""
+    Gibt {rechnungsnr(str): {"datum": ISO-str|None, "betrag": float}} zurück."""
     out = {}
     with pdfplumber.open(io.BytesIO(datei_bytes)) as pdf:
         for seite in pdf.pages:
             text = seite.extract_text() or ""
             for m in _ABR_RE.finditer(text):
                 betrag = _preis_zu_float(m.group(3))
-                if betrag is not None:
-                    out[m.group(2)] = betrag
+                if betrag is None:
+                    continue
+                try:
+                    datum = pd.to_datetime(m.group(1), format="%d.%m.%y").date().isoformat()
+                except Exception:
+                    datum = None
+                out[m.group(2)] = {"datum": datum, "betrag": betrag}
     return out
+
+
+def _abr_norm(v):
+    """Normalisiert einen Abrechnungswert auf (datum, betrag) — auch altes Float-Format."""
+    if isinstance(v, dict):
+        return v.get("datum"), v.get("betrag")
+    return None, v
 
 # ─── Header ───────────────────────────────────────────────────────────────────
 
@@ -822,12 +839,22 @@ else:
             belege_vorhanden |= {str(b) for b in (st.session_state.get(pdf_key) or {})}
 
             df_abr = pd.DataFrame(
-                [{"Rechnungsnr": str(n), "Betrag laut Abrechnung": b} for n, b in abr.items()]
+                [{"Lieferdatum": _abr_norm(v)[0],
+                  "Rechnungsnr": str(n),
+                  "Betrag laut Abrechnung": _abr_norm(v)[1]}
+                 for n, v in abr.items()]
             )
+            df_abr["_dt"] = pd.to_datetime(df_abr["Lieferdatum"], errors="coerce")
             df_abr["Vorhanden"] = df_abr["Rechnungsnr"].apply(
                 lambda n: "✅ vorhanden" if n in belege_vorhanden else "❌ fehlt"
             )
-            df_abr = df_abr.sort_values(["Vorhanden", "Rechnungsnr"]).reset_index(drop=True)
+            df_abr = (
+                df_abr.sort_values(["_dt", "Rechnungsnr"], na_position="last")
+                .drop(columns="_dt")
+                .reset_index(drop=True)
+            )
+            # Spaltenreihenfolge: Lieferdatum zuerst
+            df_abr = df_abr[["Lieferdatum", "Rechnungsnr", "Betrag laut Abrechnung", "Vorhanden"]]
 
             fehlend  = df_abr[df_abr["Vorhanden"] == "❌ fehlt"]
             n_fehlend = len(fehlend)
@@ -854,7 +881,11 @@ else:
 
             styler_abr = (
                 df_abr.style.apply(_abr_stil, axis=1)
-                .format({"Betrag laut Abrechnung": lambda v: f"{v:,.2f} €"})
+                .format({
+                    "Betrag laut Abrechnung": lambda v: f"{v:,.2f} €",
+                    "Lieferdatum": lambda v: "—" if not v or pd.isna(v)
+                    else pd.to_datetime(v).strftime("%d.%m.%Y"),
+                })
             )
             st.dataframe(styler_abr, use_container_width=True, hide_index=True)
 
