@@ -344,11 +344,15 @@ def datum_aus_dateiname(name: str):
     return None, None, None
 
 
+def beleg_aus_dateiname(name: str) -> str:
+    m = re.search(r"INVOICE-(\d+)", name, re.IGNORECASE)
+    return m.group(1) if m else name
+
+
 def parse_pdf(datei_bytes: bytes, dateiname: str) -> tuple[pd.DataFrame, float | None]:
     """Gibt (DataFrame mit Positionen, Rechnungssumme aus PDF) zurück."""
     jahr, monat, _ = datum_aus_dateiname(dateiname)
-    m_beleg = re.search(r"INVOICE-(\d+)", dateiname, re.IGNORECASE)
-    beleg = m_beleg.group(1) if m_beleg else dateiname
+    beleg = beleg_aus_dateiname(dateiname)
     zeilen = []
     total_pdf = None
     with pdfplumber.open(io.BytesIO(datei_bytes)) as pdf:
@@ -592,11 +596,14 @@ for k in [roh_key, totals_key, agg_key, pdf_key, preise_key]:
 
 load_flag = f"gh_loaded_{jahr_auswahl}_{monat_auswahl:02d}"
 if drive and st.session_state[roh_key] is None and not st.session_state.get(load_flag):
-    df_roh_drive, totals_drive, preise_drive = lade_monat_aus_drive(
-        drive, int(jahr_auswahl), monat_auswahl
-    )
-    if df_roh_drive is not None and not df_roh_drive.empty:
-        st.session_state[roh_key]    = df_roh_drive
+    if monat_existiert_in_drive(drive, int(jahr_auswahl), monat_auswahl):
+        df_roh_drive, totals_drive, preise_drive = lade_monat_aus_drive(
+            drive, int(jahr_auswahl), monat_auswahl
+        )
+        st.session_state[roh_key] = (
+            df_roh_drive if df_roh_drive is not None
+            else pd.DataFrame(columns=["PZN", "Menge", "EK_ohne_MWSt", "Warenwert", "Beleg", "Jahr", "Monat"])
+        )
         st.session_state[totals_key] = totals_drive
         st.session_state[preise_key] = preise_drive
         st.session_state[pdf_key]    = lade_pdfs_aus_drive(drive, int(jahr_auswahl), monat_auswahl)
@@ -611,32 +618,36 @@ if verarbeiten and uploads:
     fehler = []
     fortschritt = st.progress(0, text="Lese PDFs …")
 
+    leere_belege = []   # PDFs ohne erkannte Positionen
     for i, pdf_file in enumerate(uploads):
         fortschritt.progress((i + 1) / len(uploads), text=pdf_file.name)
         try:
             raw = pdf_file.read()
             df_pdf, total_pdf = parse_pdf(raw, pdf_file.name)
+            beleg = df_pdf["Beleg"].iloc[0] if not df_pdf.empty else beleg_aus_dateiname(pdf_file.name)
             if df_pdf.empty:
-                fehler.append(f"⚠️ {pdf_file.name}: Keine Positionen gefunden")
+                # Beleg trotzdem führen (mit 0 Positionen) und PDF mitsichern
+                leere_belege.append(beleg)
+                fehler.append(f"⚠️ {pdf_file.name}: Keine Positionen erkannt — als Beleg ohne "
+                              f"Positionen geführt, bitte manuell prüfen")
             else:
                 alle_zeilen.append(df_pdf)
-                beleg = df_pdf["Beleg"].iloc[0]
-                totals_neu[beleg] = total_pdf
-                pdfs_neu[beleg] = raw
+            totals_neu[beleg] = total_pdf
+            pdfs_neu[beleg]   = raw
         except Exception as e:
             fehler.append(f"❌ {pdf_file.name}: {e}")
 
     fortschritt.empty()
 
-    if alle_zeilen:
-        df_neu = pd.concat(alle_zeilen, ignore_index=True)
+    if alle_zeilen or totals_neu:
+        df_neu = pd.concat(alle_zeilen, ignore_index=True) if alle_zeilen else None
 
         # Mit bestehendem Monat zusammenführen (Duplikat-Belege ersetzen)
         df_alt = st.session_state[roh_key]
-        if df_alt is not None:
-            belege_neu = set(df_neu["Beleg"].unique())
+        belege_neu = set(totals_neu.keys())
+        if df_alt is not None and not df_alt.empty:
             df_alt = df_alt[~df_alt["Beleg"].isin(belege_neu)]
-            df_gesamt = pd.concat([df_alt, df_neu], ignore_index=True)
+            df_gesamt = pd.concat([df_alt, df_neu], ignore_index=True) if df_neu is not None else df_alt
         else:
             df_gesamt = df_neu
 
@@ -650,6 +661,9 @@ if verarbeiten and uploads:
         st.session_state[totals_key] = totals_alt
         st.session_state[pdf_key]    = pdfs_alt
 
+        if leere_belege:
+            st.warning(f"{len(leere_belege)} PDF(s) ohne erkannte Positionen — in der "
+                       f"Belegkontrolle oben mit ❌ „Keine Positionen“ gelistet.")
         for f in fehler:
             st.warning(f)
     else:
@@ -660,32 +674,60 @@ if verarbeiten and uploads:
 # ─── Belegkontrolle ───────────────────────────────────────────────────────────
 
 df_roh   = st.session_state.get(roh_key)
+if df_roh is None:
+    df_roh = pd.DataFrame(columns=["PZN", "Menge", "EK_ohne_MWSt", "Warenwert", "Beleg", "Jahr", "Monat"])
 totals   = st.session_state.get(totals_key) or {}
+pdfs     = st.session_state.get(pdf_key) or {}
 
-if df_roh is not None and not df_roh.empty:
+# Alle bekannten Belege (inkl. solcher ohne erkannte Positionen)
+belege_alle = sorted(set(df_roh["Beleg"].unique()) | set(totals.keys()) | set(pdfs.keys()))
+
+if belege_alle:
     st.subheader(f"Belegkontrolle {monat_label}")
 
-    # Beleg-Übersicht aufbauen
-    df_belege = (
-        df_roh.groupby("Beleg", as_index=False)
-        .agg(Positionen=("PZN", "count"), Warenwert_berechnet=("Warenwert", "sum"))
-        .sort_values("Beleg")
-    )
-    df_belege["Warenwert_Beleg"] = df_belege["Beleg"].map(totals)
-    df_belege["Differenz"]       = (
+    # Beleg-Übersicht aufbauen — auch Belege mit 0 Positionen
+    df_belege = pd.DataFrame({"Beleg": belege_alle})
+    if not df_roh.empty:
+        grp = (
+            df_roh.groupby("Beleg", as_index=False)
+            .agg(Positionen=("PZN", "count"), Warenwert_berechnet=("Warenwert", "sum"))
+        )
+        df_belege = df_belege.merge(grp, on="Beleg", how="left")
+    else:
+        df_belege["Positionen"] = 0
+        df_belege["Warenwert_berechnet"] = 0.0
+    df_belege["Positionen"]          = df_belege["Positionen"].fillna(0).astype(int)
+    df_belege["Warenwert_berechnet"] = df_belege["Warenwert_berechnet"].fillna(0.0)
+    df_belege["Warenwert_Beleg"]     = df_belege["Beleg"].map(totals)
+    df_belege["Differenz"]           = (
         df_belege["Warenwert_berechnet"] - df_belege["Warenwert_Beleg"]
     ).round(2)
-    df_belege["Status"] = df_belege["Differenz"].apply(
-        lambda d: "✅" if pd.notna(d) and abs(d) < 0.01 else ("⚠️ Abweichung" if pd.notna(d) else "❓")
-    )
 
-    n_ok  = (df_belege["Status"] == "✅").sum()
-    n_err = len(df_belege) - n_ok
-    c1, c2, c3, c4 = st.columns(4)
+    def _status(r):
+        if r["Positionen"] == 0:
+            return "❌ Keine Positionen"
+        d = r["Differenz"]
+        if pd.notna(d) and abs(d) < 0.01:
+            return "✅"
+        if pd.notna(d):
+            return "⚠️ Abweichung"
+        return "❓"
+    df_belege["Status"] = df_belege.apply(_status, axis=1)
+
+    # Problemfälle nach oben
+    _prio = {"❌ Keine Positionen": 0, "⚠️ Abweichung": 1, "❓": 2, "✅": 3}
+    df_belege["_p"] = df_belege["Status"].map(_prio).fillna(2)
+    df_belege = df_belege.sort_values(["_p", "Beleg"]).drop(columns="_p").reset_index(drop=True)
+
+    n_ok   = int((df_belege["Status"] == "✅").sum())
+    n_abw  = int((df_belege["Status"] == "⚠️ Abweichung").sum())
+    n_leer = int((df_belege["Positionen"] == 0).sum())
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Belege", len(df_belege))
     c2.metric("✅ OK", n_ok)
-    c3.metric("⚠️ Abweichungen", n_err)
-    c4.metric("Gesamtwert", f"{df_belege['Warenwert_berechnet'].sum():,.2f} €")
+    c3.metric("⚠️ Abweichungen", n_abw)
+    c4.metric("❌ Keine Pos.", n_leer)
+    c5.metric("Gesamtwert", f"{df_belege['Warenwert_berechnet'].sum():,.2f} €")
 
     st.divider()
 
@@ -759,9 +801,10 @@ if df_roh is not None and not df_roh.empty:
                            f"({neuer_wert:,.2f} € berechnet vs. {beleg_wert:,.2f} € laut Beleg).")
 
         if st.button("💾 Korrekturen übernehmen", key=f"save_{beleg}", type="primary"):
+            edited = edited[edited["PZN"].notna() & (edited["PZN"].astype(str) != "")]
             edited["Beleg"] = beleg
-            edited["Jahr"]  = df_b["Jahr"].iloc[0]
-            edited["Monat"] = df_b["Monat"].iloc[0]
+            edited["Jahr"]  = df_b["Jahr"].iloc[0]  if not df_b.empty else int(jahr_auswahl)
+            edited["Monat"] = df_b["Monat"].iloc[0] if not df_b.empty else monat_auswahl
             df_rest = df_roh[df_roh["Beleg"] != beleg]
             st.session_state[roh_key] = pd.concat([df_rest, edited], ignore_index=True)
             st.success(f"✓ Beleg {beleg} aktualisiert")
