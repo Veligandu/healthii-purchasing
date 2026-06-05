@@ -95,6 +95,68 @@ def finde_letzte_bestellung(drive=None):
         return os.path.basename(pfad), pd.read_excel(pfad)
 
 
+_ALGO_DEFAULTS = {
+    "algo_w30":              0.7,
+    "algo_w90":              0.3,
+    "algo_ziel_tage":        60,
+    "algo_mbw_standard":     2000.0,
+    "algo_krit_pos":         0.0,
+    "algo_mindestreichweite": 30,
+}
+
+def _auto_save_algo():
+    """Callback: speichert Algo-Einstellungen sofort nach Änderung in Drive."""
+    # algo_w90 von w30 ableiten
+    st.session_state["algo_w90"] = round(1.0 - st.session_state.get("algo_w30", 0.7), 10)
+    drive = st.session_state.get("drive")
+    if drive:
+        try:
+            speichere_algo_config(drive, {
+                k: st.session_state.get(k, d)
+                for k, d in _ALGO_DEFAULTS.items()
+            })
+        except Exception:
+            pass
+
+
+def lade_algo_config(drive):
+    """Lädt Algorithmus-Einstellungen aus Drive (algo_config.json im Stammdaten-Ordner)."""
+    try:
+        import json as _json
+        from googleapiclient.http import MediaIoBaseDownload as _MIBD
+        sid = get_stammdaten_folder_id(drive)
+        q   = f"name='algo_config.json' and '{sid}' in parents and trashed=false"
+        res = drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
+        files = res.get("files", [])
+        if not files:
+            return {}
+        buf = io.BytesIO()
+        dl  = _MIBD(buf, drive.files().get_media(fileId=files[0]["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        return _json.loads(buf.getvalue().decode())
+    except Exception:
+        return {}
+
+def speichere_algo_config(drive, config: dict):
+    """Speichert Algorithmus-Einstellungen als JSON in Drive."""
+    import json as _json
+    from googleapiclient.http import MediaIoBaseUpload as _MIU
+    sid   = get_stammdaten_folder_id(drive)
+    data  = _json.dumps(config, indent=2).encode()
+    media = _MIU(io.BytesIO(data), mimetype="application/json")
+    q     = f"name='algo_config.json' and '{sid}' in parents and trashed=false"
+    ex    = drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
+    if ex:
+        drive.files().update(fileId=ex[0]["id"], media_body=media).execute()
+    else:
+        drive.files().create(
+            body={"name": "algo_config.json", "parents": [sid]},
+            media_body=media, fields="id",
+        ).execute()
+
+
 def speichere_historie(df_input, df_bestellen, drive=None):
     """Speichert Bestellhistorie lokal und/oder in Drive."""
     historie_name, historie_pfad = speichere_bestellhistorie(df_input, df_bestellen)
@@ -359,6 +421,13 @@ if not st.session_state.drive_verbunden:
     st.session_state.drive = drive
     st.session_state.drive_verbunden = True
 
+    # Algorithmus-Einstellungen aus Drive laden
+    if drive:
+        _saved_config = lade_algo_config(drive)
+        for _k, _default in _ALGO_DEFAULTS.items():
+            if _k not in st.session_state:
+                st.session_state[_k] = _saved_config.get(_k, _default)
+
     # Beim Start: letzten Stand aus Drive wiederherstellen
     if drive and not st.session_state.get("excel_bytes_input"):
         from googleapiclient.http import MediaIoBaseDownload
@@ -509,6 +578,7 @@ with st.sidebar:
                 _CONFIG["kritische_positionsgroesse"] = st.session_state.get("algo_krit_pos", 0.0)
                 _CONFIG["mindestreichweite"]          = st.session_state.get("algo_mindestreichweite", 30)
 
+
                 ergebnis = berechne_bestellvorschlag(
                     st.session_state.excel_bytes_input, letzte_bestellung_df, mbw_ausnahmen
                 )
@@ -576,7 +646,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     # ── Algorithmus-Einstellungen ──────────────────────────────────────────────
     with st.expander("⚙️ Algorithmus"):
-        st.caption("Einstellungen werden beim nächsten Klick auf **Berechnen** übernommen.")
+        st.caption("Änderungen werden sofort gespeichert und beim nächsten **Berechnen** angewendet.")
         col_a, col_b = st.columns(2)
         with col_a:
             w30_pct = st.slider(
@@ -585,29 +655,36 @@ with tab1:
                 value=int(st.session_state.get("algo_w30", 0.7) * 100),
                 step=10, format="%d%%",
                 help="Anteil der letzten 30 Tage am Tagesverbrauch",
+                key="_slider_w30",
+                on_change=lambda: (
+                    st.session_state.update({
+                        "algo_w30": st.session_state["_slider_w30"] / 100,
+                        "algo_w90": 1 - st.session_state["_slider_w30"] / 100,
+                    }) or _auto_save_algo()
+                ),
             )
             st.session_state["algo_w30"] = w30_pct / 100
             st.session_state["algo_w90"] = 1 - w30_pct / 100
             st.caption(f"→ Tagesverbrauch = **{w30_pct}% × L30/30** + **{100-w30_pct}% × L90/90**")
 
         with col_b:
-            ziel = st.number_input(
+            st.number_input(
                 "Ziel-Reichweite (Tage)",
                 min_value=7, max_value=365,
-                value=int(st.session_state.get("algo_ziel_tage", 60)),
                 step=5,
                 help="Wie viele Tage soll der Bestand nach der Bestellung reichen?",
+                key="algo_ziel_tage",
+                on_change=_auto_save_algo,
             )
-            st.session_state["algo_ziel_tage"] = ziel
 
-        mbw_std = st.number_input(
+        st.number_input(
             "Standard-MBW (€)",
             min_value=0, max_value=50000,
-            value=int(st.session_state.get("algo_mbw_standard", 2000)),
             step=100,
             help="Gilt für alle Hersteller ohne eigenen Eintrag unten",
+            key="algo_mbw_standard",
+            on_change=_auto_save_algo,
         )
-        st.session_state["algo_mbw_standard"] = float(mbw_std)
 
         # MBW-Ausnahmen Tabelle
         st.caption("**Hersteller-Ausnahmen (mbw_exceptions.csv)**")
@@ -666,25 +743,27 @@ with tab1:
         st.caption("Ist der Bestellwert einer einzelnen Position größer als der Grenzwert, wird die Menge um eine Ve reduziert — solange die Mindestreichweite noch erfüllt ist.")
         col_c, col_d = st.columns(2)
         with col_c:
-            krit = st.number_input(
+            st.number_input(
                 "Grenzwert je Position (€)",
                 min_value=0, max_value=100000,
-                value=int(st.session_state.get("algo_krit_pos", 0)),
                 step=100,
                 help="0 = deaktiviert",
+                key="algo_krit_pos",
+                on_change=_auto_save_algo,
             )
-            st.session_state["algo_krit_pos"] = float(krit)
         with col_d:
-            mind_rw = st.number_input(
+            st.number_input(
                 "Mindestreichweite (Tage)",
                 min_value=0, max_value=365,
-                value=int(st.session_state.get("algo_mindestreichweite", 30)),
                 step=5,
-                help="Reduzierung nur wenn Reichweite danach noch ≥ diesem Wert",
+                help="Mindestreichweite die nach Reduktion noch erfüllt sein muss",
+                key="algo_mindestreichweite",
+                on_change=_auto_save_algo,
             )
-            st.session_state["algo_mindestreichweite"] = int(mind_rw)
-        if krit > 0:
-            st.caption(f"→ Position > {krit:,.0f} € → Ve reduzieren, falls Reichweite noch ≥ {mind_rw} Tage")
+        _krit = st.session_state.get("algo_krit_pos", 0)
+        _mind = st.session_state.get("algo_mindestreichweite", 30)
+        if _krit > 0:
+            st.caption(f"→ Position > {_krit:,.0f} € → Minimum für {_mind} Tage Reichweite bestellen")
 
     st.divider()
 
