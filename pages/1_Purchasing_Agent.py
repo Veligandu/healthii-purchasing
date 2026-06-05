@@ -568,6 +568,7 @@ with st.sidebar:
     # Berechnen-Button
     if st.session_state.get("excel_bytes_input"):
         if st.button("▶ Berechnen", use_container_width=True, type="primary"):
+            st.session_state["excel_out"] = None  # altes Excel verwerfen
             with st.spinner("Berechne …"):
                 letzte_bestellung_df = lade_letzte_bestellung_fuer_berechnung(st.session_state.drive)
                 mbw_ausnahmen = {}
@@ -946,17 +947,19 @@ with tab1:
         col_dl, col_save = st.columns(2)
 
         with col_dl:
-            if st.button("📥 Purchase-Order herunterladen", use_container_width=True, type="primary"):
+            if st.button("🔄 Excel erstellen", use_container_width=True, type="primary"):
                 with st.spinner("Erstelle Excel …"):
                     ergebnis_export = dict(ergebnis)
                     _df_export = _stelle_mbw_wieder_her(
                         st.session_state.df_bestellen_edit.copy(), ergebnis
                     )
                     ergebnis_export["bestellen"] = _df_export
-                    excel_out = erstelle_bestellsheet(ergebnis_export, kw, year)
+                    st.session_state["excel_out"] = erstelle_bestellsheet(ergebnis_export, kw, year)
+
+            if st.session_state.get("excel_out"):
                 st.download_button(
-                    label="💾 Datei speichern",
-                    data=excel_out,
+                    label="📥 Purchase-Order herunterladen",
+                    data=st.session_state["excel_out"],
                     file_name=f"Purchase-Order-KW{kw:02d}-{year}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
