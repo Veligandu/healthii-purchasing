@@ -178,7 +178,7 @@ def lade_monat_aus_drive(_drive, jahr, monat):
         res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
         files = res.get("files", [])
         if not files:
-            return None, {}, {}
+            return None, {}, {}, {}
         buf = io.BytesIO()
         dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=files[0]["id"]))
         done = False
@@ -198,9 +198,13 @@ def lade_monat_aus_drive(_drive, jahr, monat):
         if "Preise" in xls.sheet_names:
             df_p = pd.read_excel(xls, "Preise", dtype={"PZN": str})
             preise = dict(zip(df_p["PZN"], df_p["Preis"]))
-        return df_roh, totals, preise
+        abr = {}
+        if "Abrechnung" in xls.sheet_names:
+            df_a = pd.read_excel(xls, "Abrechnung", dtype={"Rechnungsnr": str})
+            abr = dict(zip(df_a["Rechnungsnr"], df_a["Betrag"]))
+        return df_roh, totals, preise, abr
     except Exception:
-        return None, {}, {}
+        return None, {}, {}, {}
 
 
 def monat_existiert_in_drive(_drive, jahr, monat):
@@ -215,8 +219,8 @@ def monat_existiert_in_drive(_drive, jahr, monat):
         return False
 
 
-def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, preise, jahr, monat):
-    """Speichert Monatstabelle + Rohdaten + PDF-Summen + Preise als Excel in Drive."""
+def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, preise, abr, jahr, monat):
+    """Speichert Monatstabelle + Rohdaten + Summen + Preise + Abrechnung als Excel in Drive."""
     from googleapiclient.http import MediaIoBaseUpload
     folder_id = get_gh_folder_id(_drive)
     name = f"gh_rechnung_{jahr}_{monat:02d}.xlsx"
@@ -225,6 +229,9 @@ def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, preise, jahr, monat
     )
     df_preise = pd.DataFrame(
         [{"PZN": p, "Preis": v} for p, v in (preise or {}).items()]
+    )
+    df_abr = pd.DataFrame(
+        [{"Rechnungsnr": n, "Betrag": b} for n, b in (abr or {}).items()]
     )
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
@@ -235,6 +242,8 @@ def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, preise, jahr, monat
             df_totals.to_excel(w, index=False, sheet_name="Summen")
         if not df_preise.empty:
             df_preise.to_excel(w, index=False, sheet_name="Preise")
+        if not df_abr.empty:
+            df_abr.to_excel(w, index=False, sheet_name="Abrechnung")
     buf.seek(0)
     media = MediaIoBaseUpload(
         buf,
@@ -458,6 +467,27 @@ def parse_preis_csv(datei_bytes: bytes, jahr: int, monat: int) -> dict:
 
     return {pzn: preis for pzn, (_, preis) in best.items()}
 
+# ─── Monatsabrechnung-Parser (GH) ─────────────────────────────────────────────
+
+# Zeile: [--] DD.MM.YY  01  Rechnungsnr(6)  [Beträge…]  Gesamt  CODE(z.B. NO)
+_ABR_RE = re.compile(
+    r"^\s*(?:[-–]+\s*)?(\d{2}\.\d{2}\.\d{2})\s+\d+\s+(\d{6})\s+.*?([\d.]+,\d{2})\s+[A-Z]{2}\s*$",
+    re.MULTILINE,
+)
+
+def parse_abrechnung(datei_bytes: bytes) -> dict:
+    """Liest aus einer Phoenix-Monatsabrechnung die abgerechneten Rechnungsnummern.
+    Gibt {rechnungsnr(str): gesamtbetrag(float)} zurück."""
+    out = {}
+    with pdfplumber.open(io.BytesIO(datei_bytes)) as pdf:
+        for seite in pdf.pages:
+            text = seite.extract_text() or ""
+            for m in _ABR_RE.finditer(text):
+                betrag = _preis_zu_float(m.group(3))
+                if betrag is not None:
+                    out[m.group(2)] = betrag
+    return out
+
 # ─── Header ───────────────────────────────────────────────────────────────────
 
 logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logo.png")
@@ -544,6 +574,40 @@ with st.sidebar:
 
     st.divider()
 
+    # Monatsabrechnungen (GH): listen die abgerechneten Rechnungsnummern
+    st.header("📑 Monatsabrechnungen")
+    _abr_key = f"gh_abr_{jahr_auswahl}_{monat_auswahl:02d}"
+    abr_uploads = st.file_uploader(
+        "Abrechnungen (PDF)",
+        type=["pdf"],
+        accept_multiple_files=True,
+        help="Die GH-Monatsabrechnungen (z. B. 10., 20., Ultimo) auf einmal auswählen.",
+        key=f"abr_upload_{jahr_auswahl}_{monat_auswahl:02d}",
+    )
+    if st.button("▶ Abrechnungen einlesen", use_container_width=True, disabled=not abr_uploads):
+        abr_neu = dict(st.session_state.get(_abr_key) or {})
+        n_dok = 0
+        for f in abr_uploads:
+            try:
+                gefunden = parse_abrechnung(f.read())
+                abr_neu.update(gefunden)
+                n_dok += 1
+            except Exception as e:
+                st.warning(f"❌ {f.name}: {e}")
+        if abr_neu:
+            st.session_state[_abr_key] = abr_neu
+            st.success(f"✓ {n_dok} Abrechnung(en) gelesen — {len(abr_neu)} Rechnungsnummern")
+        else:
+            st.error("Keine Rechnungsnummern erkannt.")
+    _akt_abr = st.session_state.get(_abr_key) or {}
+    if _akt_abr:
+        st.caption(f"Aktuell {len(_akt_abr)} abgerechnete Rechnungsnummern.")
+        if st.button("🗑 Abrechnungen zurücksetzen", use_container_width=True):
+            st.session_state[_abr_key] = {}
+            st.rerun()
+
+    st.divider()
+
     # Gespeicherte Monate aus Drive laden
     if drive:
         st.header("📁 Gespeicherte Monate")
@@ -587,8 +651,9 @@ totals_key = f"gh_totals_{jahr_auswahl}_{monat_auswahl:02d}" # PDF-Summen pro Be
 agg_key    = f"gh_agg_{jahr_auswahl}_{monat_auswahl:02d}"    # aggregierte Monatstabelle
 pdf_key    = f"gh_pdfs_{jahr_auswahl}_{monat_auswahl:02d}"   # Original-PDF-Bytes pro Beleg
 preise_key = f"gh_preise_{jahr_auswahl}_{monat_auswahl:02d}" # PZN → Healthii-EK-Preis
+abr_key    = f"gh_abr_{jahr_auswahl}_{monat_auswahl:02d}"    # Rechnungsnr → Betrag laut Abrechnung
 
-for k in [roh_key, totals_key, agg_key, pdf_key, preise_key]:
+for k in [roh_key, totals_key, agg_key, pdf_key, preise_key, abr_key]:
     if k not in st.session_state:
         st.session_state[k] = None
 
@@ -597,7 +662,7 @@ for k in [roh_key, totals_key, agg_key, pdf_key, preise_key]:
 load_flag = f"gh_loaded_{jahr_auswahl}_{monat_auswahl:02d}"
 if drive and st.session_state[roh_key] is None and not st.session_state.get(load_flag):
     if monat_existiert_in_drive(drive, int(jahr_auswahl), monat_auswahl):
-        df_roh_drive, totals_drive, preise_drive = lade_monat_aus_drive(
+        df_roh_drive, totals_drive, preise_drive, abr_drive = lade_monat_aus_drive(
             drive, int(jahr_auswahl), monat_auswahl
         )
         st.session_state[roh_key] = (
@@ -606,6 +671,7 @@ if drive and st.session_state[roh_key] is None and not st.session_state.get(load
         )
         st.session_state[totals_key] = totals_drive
         st.session_state[preise_key] = preise_drive
+        st.session_state[abr_key]    = abr_drive
         st.session_state[pdf_key]    = lade_pdfs_aus_drive(drive, int(jahr_auswahl), monat_auswahl)
     st.session_state[load_flag] = True
 
@@ -904,8 +970,9 @@ if belege_alle:
     col_save, col_dl = st.columns(2)
 
     def _speichern_ausfuehren():
+        abr_session = st.session_state.get(abr_key) or {}
         speichere_monat_in_drive(
-            drive, df_agg, df_roh, totals, preise, int(jahr_auswahl), monat_auswahl
+            drive, df_agg, df_roh, totals, preise, abr_session, int(jahr_auswahl), monat_auswahl
         )
         pdfs_session = st.session_state.get(pdf_key) or {}
         speichere_pdfs_in_drive(drive, pdfs_session, int(jahr_auswahl), monat_auswahl)
@@ -964,3 +1031,69 @@ else:
             Monat auswählen und PDFs hochladen — oder gespeicherten Monat links anklicken
         </div>
     </div>""", unsafe_allow_html=True)
+
+# ─── Abgleich mit Monatsabrechnung ────────────────────────────────────────────
+
+abr = st.session_state.get(abr_key) or {}
+if abr:
+    st.divider()
+    st.subheader(f"Abgleich Monatsabrechnung {monat_label}")
+
+    # Vorhandene Belegnummern dieses Monats
+    _df_roh = st.session_state.get(roh_key)
+    belege_vorhanden = set()
+    if _df_roh is not None and not _df_roh.empty:
+        belege_vorhanden |= set(_df_roh["Beleg"].astype(str))
+    belege_vorhanden |= {str(b) for b in (st.session_state.get(totals_key) or {})}
+    belege_vorhanden |= {str(b) for b in (st.session_state.get(pdf_key) or {})}
+
+    df_abr = pd.DataFrame(
+        [{"Rechnungsnr": str(n), "Betrag laut Abrechnung": b} for n, b in abr.items()]
+    )
+    df_abr["Vorhanden"] = df_abr["Rechnungsnr"].apply(
+        lambda n: "✅ vorhanden" if n in belege_vorhanden else "❌ fehlt"
+    )
+    df_abr = df_abr.sort_values(["Vorhanden", "Rechnungsnr"]).reset_index(drop=True)
+
+    fehlend  = df_abr[df_abr["Vorhanden"] == "❌ fehlt"]
+    n_fehlend = len(fehlend)
+    summe_fehlend = fehlend["Betrag laut Abrechnung"].sum()
+
+    # Belege, die wir haben, aber die in keiner Abrechnung stehen (Gegenkontrolle)
+    extra = sorted(belege_vorhanden - set(df_abr["Rechnungsnr"]))
+
+    a1, a2, a3, a4 = st.columns(4)
+    a1.metric("Abgerechnet", len(df_abr))
+    a2.metric("✅ Vorhanden", int((df_abr["Vorhanden"] == "✅ vorhanden").sum()))
+    a3.metric("❌ Fehlend", n_fehlend)
+    a4.metric("Summe fehlend", f"{summe_fehlend:,.2f} €")
+
+    if n_fehlend:
+        st.warning(f"{n_fehlend} laut Abrechnung berechnete Belege fehlen "
+                   f"(Summe {summe_fehlend:,.2f} €) — siehe ❌ in der Tabelle.")
+    else:
+        st.success("Alle laut Abrechnung berechneten Belege sind vorhanden.")
+
+    def _abr_stil(row):
+        rot = "background-color: #FEE2E2"
+        return [rot if row["Vorhanden"] == "❌ fehlt" else "" for _ in row]
+
+    styler_abr = (
+        df_abr.style.apply(_abr_stil, axis=1)
+        .format({"Betrag laut Abrechnung": lambda v: f"{v:,.2f} €"})
+    )
+    st.dataframe(styler_abr, use_container_width=True, hide_index=True)
+
+    _abr_buf = io.BytesIO()
+    df_abr.to_excel(_abr_buf, index=False, sheet_name="Abrechnungsabgleich")
+    st.download_button(
+        "📥 Abgleich als Excel",
+        data=_abr_buf.getvalue(),
+        file_name=f"abrechnungsabgleich_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=f"dl_abr_{jahr_auswahl}_{monat_auswahl:02d}",
+    )
+
+    if extra:
+        st.caption(f"ℹ️ {len(extra)} vorhandene Belege stehen in keiner Abrechnung: "
+                   f"{', '.join(extra[:30])}{' …' if len(extra) > 30 else ''}")
