@@ -854,17 +854,17 @@ with tab1:
         _markiert = edited["🗑"].sum()
         _btn_label = f"💾 Änderungen übernehmen{f'  ({_markiert} Zeile(n) löschen)' if _markiert else ''}"
         if st.button(_btn_label, type="primary"):
-            _delete_idx = edited.index[edited["🗑"]].tolist()
-            _df_full = st.session_state.df_bestellen_edit.copy()
-            # Bestellmenge + Bestellwert zurückschreiben
-            for _i in edited.index[~edited["🗑"]]:
-                if _i in _df_full.index:
-                    _df_full.at[_i, "Bestellmenge"] = edited.at[_i, "Bestellmenge"]
-                    _df_full.at[_i, "Bestellwert"]  = edited.at[_i, "Bestellwert"]
+            # edited und df_full haben gleichen 0-basierten Index durch reset_index oben
+            _df_full = st.session_state.df_bestellen_edit.copy().reset_index(drop=True)
+            _keep_mask = ~edited["🗑"].values  # boolean array, positionsbasiert
+            # Bestellmenge + Bestellwert für beibehaltene Zeilen zurückschreiben
+            _df_full.loc[_keep_mask, "Bestellmenge"] = edited.loc[_keep_mask, "Bestellmenge"].values
+            _df_full.loc[_keep_mask, "Bestellwert"]  = edited.loc[_keep_mask, "Bestellwert"].values
             # Gelöschte Zeilen entfernen
-            _df_full = _df_full.drop(index=_delete_idx).reset_index(drop=True)
+            _df_full = _df_full[_keep_mask].reset_index(drop=True)
             _df_full = _stelle_mbw_wieder_her(_df_full, ergebnis)
             st.session_state.df_bestellen_edit = _df_full
+            st.session_state["excel_out"] = None  # Excel invalidieren
             st.success(f"✓ Übernommen{f' — {_markiert} Position(en) entfernt' if _markiert else ''}")
             st.rerun()
 
