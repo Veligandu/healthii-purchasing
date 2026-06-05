@@ -353,7 +353,7 @@ st.markdown("""
     }
     .stDownloadButton > button:hover { background: #0B7A70; }
 
-    /* File Uploader – "+" Button ausblenden */
+    /* File Uploader */
     [data-testid="stFileUploader"] {
         border: 2px dashed #D1D5DB;
         border-radius: 12px;
@@ -361,8 +361,6 @@ st.markdown("""
         padding: 8px;
     }
     [data-testid="stFileUploader"]:hover { border-color: #0D9488; }
-    [data-testid="stFileUploaderDropzone"] button[kind="secondary"] { display: none !important; }
-    [data-testid="stFileUploaderDropzoneInstructions"] > div > span { display: none !important; }
 
     /* number_input: +/- Buttons ausblenden */
     button[data-testid="stNumberInputStepDown"],
