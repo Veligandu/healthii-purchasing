@@ -618,20 +618,15 @@ if verarbeiten and uploads:
     fehler = []
     fortschritt = st.progress(0, text="Lese PDFs …")
 
-    leere_belege = []   # PDFs ohne erkannte Positionen
     for i, pdf_file in enumerate(uploads):
         fortschritt.progress((i + 1) / len(uploads), text=pdf_file.name)
         try:
             raw = pdf_file.read()
             df_pdf, total_pdf = parse_pdf(raw, pdf_file.name)
             beleg = df_pdf["Beleg"].iloc[0] if not df_pdf.empty else beleg_aus_dateiname(pdf_file.name)
-            if df_pdf.empty:
-                # Beleg trotzdem führen (mit 0 Positionen) und PDF mitsichern
-                leere_belege.append(beleg)
-                fehler.append(f"⚠️ {pdf_file.name}: Keine Positionen erkannt — als Beleg ohne "
-                              f"Positionen geführt, bitte manuell prüfen")
-            else:
+            if not df_pdf.empty:
                 alle_zeilen.append(df_pdf)
+            # Beleg in jedem Fall führen (auch ohne Positionen) und PDF mitsichern
             totals_neu[beleg] = total_pdf
             pdfs_neu[beleg]   = raw
         except Exception as e:
@@ -661,9 +656,6 @@ if verarbeiten and uploads:
         st.session_state[totals_key] = totals_alt
         st.session_state[pdf_key]    = pdfs_alt
 
-        if leere_belege:
-            st.warning(f"{len(leere_belege)} PDF(s) ohne erkannte Positionen — in der "
-                       f"Belegkontrolle oben mit ❌ „Keine Positionen“ gelistet.")
         for f in fehler:
             st.warning(f)
     else:
@@ -713,11 +705,7 @@ if belege_alle:
             return "⚠️ Abweichung"
         return "❓"
     df_belege["Status"] = df_belege.apply(_status, axis=1)
-
-    # Problemfälle nach oben
-    _prio = {"❌ Keine Positionen": 0, "⚠️ Abweichung": 1, "❓": 2, "✅": 3}
-    df_belege["_p"] = df_belege["Status"].map(_prio).fillna(2)
-    df_belege = df_belege.sort_values(["_p", "Beleg"]).drop(columns="_p").reset_index(drop=True)
+    df_belege = df_belege.sort_values("Beleg").reset_index(drop=True)
 
     n_ok   = int((df_belege["Status"] == "✅").sum())
     n_abw  = int((df_belege["Status"] == "⚠️ Abweichung").sum())
