@@ -610,11 +610,14 @@ with st.sidebar:
     jahr_auswahl  = col_j.number_input("Jahr", min_value=2020, max_value=2099,
                                         step=1, key="gh_jahr")
 
+    if "gh_upl_nonce" not in st.session_state:
+        st.session_state.gh_upl_nonce = 0
     uploads = st.file_uploader(
         "PDF-Rechnungen",
         type=["pdf"],
         accept_multiple_files=True,
         help="Mehrere Phoenix-Sammelrechnungen auf einmal auswählen",
+        key=f"pdf_upl_{st.session_state.gh_upl_nonce}",
     )
 
     nur_neue = st.checkbox("Bereits eingelesene überspringen", value=True,
@@ -758,6 +761,10 @@ if drive and st.session_state[roh_key] is None and not st.session_state.get(load
 
 # ─── PDFs einlesen ────────────────────────────────────────────────────────────
 
+# Einlese-Meldungen aus dem vorherigen Lauf anzeigen (nach Upload-Reset)
+for _lvl, _txt in st.session_state.pop("gh_upl_msgs", []):
+    getattr(st, _lvl)(_txt)
+
 if verarbeiten and uploads:
     alle_zeilen = []
     totals_neu  = {}   # beleg → total_pdf
@@ -795,8 +802,10 @@ if verarbeiten and uploads:
             fehler.append(f"❌ {pdf_file.name}: {e}")
 
     fortschritt.empty()
+
+    msgs = []
     if n_skip:
-        st.info(f"{n_skip} bereits vorhandene Beleg(e) übersprungen.")
+        msgs.append(("info", f"{n_skip} bereits vorhandene Beleg(e) übersprungen."))
 
     if alle_zeilen or totals_neu:
         df_neu = pd.concat(alle_zeilen, ignore_index=True) if alle_zeilen else None
@@ -820,15 +829,21 @@ if verarbeiten and uploads:
         st.session_state[totals_key] = totals_alt
         st.session_state[pdf_key]    = pdfs_alt
 
+        msgs.append(("success", f"✓ {len(totals_neu)} neue(r) Beleg(e) eingelesen."))
         for f in fehler:
-            st.warning(f)
+            msgs.append(("warning", f))
     elif not n_skip:
-        st.error("Keine Daten konnten extrahiert werden.")
+        msgs.append(("error", "Keine Daten konnten extrahiert werden."))
         for f in fehler:
-            st.warning(f)
+            msgs.append(("warning", f))
     else:
         for f in fehler:
-            st.warning(f)
+            msgs.append(("warning", f))
+
+    # Meldungen merken, Upload-Bereich leeren (neuer Key) und neu rendern
+    st.session_state["gh_upl_msgs"] = msgs
+    st.session_state.gh_upl_nonce += 1
+    st.rerun()
 
 # ─── Daten laden & in Tabs darstellen ─────────────────────────────────────────
 
