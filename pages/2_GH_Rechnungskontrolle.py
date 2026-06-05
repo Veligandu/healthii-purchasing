@@ -371,9 +371,25 @@ def parse_pdf(datei_bytes: bytes, dateiname: str) -> tuple[pd.DataFrame, float |
 
 # ─── Preis-CSV-Parser ─────────────────────────────────────────────────────────
 
-def parse_preis_csv(datei_bytes: bytes) -> dict:
-    """Liest PZN → Healthii-EK-Preis aus CSV. Gibt {PZN(str, 8-stellig): preis(float)}.
-    Erkennt ; oder , als Trenner und deutsches (1.234,56) wie englisches (1234.56) Format."""
+def _preis_zu_float(raw: str):
+    raw = str(raw).strip().replace("€", "").replace(" ", "")
+    if not raw:
+        return None
+    if "," in raw:        # deutsches Format: 1.234,56 → 1234.56
+        raw = raw.replace(".", "").replace(",", ".")
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def parse_preis_csv(datei_bytes: bytes, jahr: int, monat: int) -> dict:
+    """Liest PZN → Healthii-EK-Preis aus CSV, gefiltert auf Gültigkeit im Monat.
+    Gibt {PZN(str, 8-stellig): preis(float)}.
+
+    Erkennt ; oder , als Trenner, deutsches/englisches Dezimalformat sowie
+    optionale Spalten valid_from / valid_till (ISO-Datum). Liegt der Monat
+    außerhalb der Gültigkeit, wird die PZN nicht bewertet."""
     text = None
     for enc in ("utf-8-sig", "utf-8", "latin-1"):
         try:
@@ -388,34 +404,55 @@ def parse_preis_csv(datei_bytes: bytes) -> dict:
     if df.empty or len(df.columns) < 2:
         return {}
 
-    # PZN-Spalte: bevorzugt mit "pzn" im Namen, sonst erste Spalte
-    pzn_col = next((c for c in df.columns if "pzn" in str(c).lower()), df.columns[0])
-    # Preis-Spalte: bevorzugt mit healthii/ek/preis/price, sonst letzte andere Spalte
-    preis_col = None
-    for key in ("healthii", "ek", "preis", "price"):
-        preis_col = next((c for c in df.columns if key in str(c).lower() and c != pzn_col), None)
-        if preis_col:
-            break
+    cols = {str(c).lower(): c for c in df.columns}
+
+    def _find(*keys, exclude=None):
+        for k in keys:
+            for low, orig in cols.items():
+                if k in low and orig != exclude:
+                    return orig
+        return None
+
+    pzn_col   = _find("pzn") or df.columns[0]
+    preis_col = _find("price", "preis", "ek", "healthii", exclude=pzn_col)
     if preis_col is None:
         rest = [c for c in df.columns if c != pzn_col]
         preis_col = rest[-1] if rest else None
     if preis_col is None:
         return {}
+    from_col = _find("valid_from", "gueltig_von", "von", exclude=pzn_col)
+    till_col = _find("valid_till", "valid_to", "gueltig_bis", "bis", exclude=pzn_col)
 
-    out = {}
+    # Monatsfenster
+    monatsstart = pd.Timestamp(year=int(jahr), month=int(monat), day=1)
+    monatsende  = monatsstart + pd.offsets.MonthEnd(0)
+
+    # je PZN den im Monat gültigen Eintrag mit jüngstem valid_from wählen
+    best = {}   # pzn → (valid_from_ts, preis)
     for _, row in df.iterrows():
         pzn = re.sub(r"\D", "", str(row[pzn_col]))
         if not pzn:
             continue
         pzn = pzn.zfill(8)
-        raw = str(row[preis_col]).strip().replace("€", "").replace(" ", "")
-        if "," in raw:                       # deutsches Format: Tausenderpunkt weg, Komma→Punkt
-            raw = raw.replace(".", "").replace(",", ".")
-        try:
-            out[pzn] = float(raw)
-        except ValueError:
+        preis = _preis_zu_float(row[preis_col])
+        if preis is None:
             continue
-    return out
+
+        vf = pd.to_datetime(row[from_col], errors="coerce") if from_col else pd.NaT
+        vt = pd.to_datetime(row[till_col], errors="coerce") if till_col else pd.NaT
+
+        # Gültigkeit prüfen: Überlappung mit dem Monat (offene Grenzen erlaubt)
+        if from_col or till_col:
+            if pd.notna(vf) and vf > monatsende:
+                continue
+            if pd.notna(vt) and vt < monatsstart:
+                continue
+
+        rank = vf if pd.notna(vf) else pd.Timestamp.min
+        if pzn not in best or rank >= best[pzn][0]:
+            best[pzn] = (rank, preis)
+
+    return {pzn: preis for pzn, (_, preis) in best.items()}
 
 # ─── Header ───────────────────────────────────────────────────────────────────
 
@@ -491,12 +528,12 @@ with st.sidebar:
         key=f"preis_csv_{jahr_auswahl}_{monat_auswahl:02d}",
     )
     if st.button("▶ Preise laden", use_container_width=True, disabled=not preis_csv):
-        preise = parse_preis_csv(preis_csv.read())
+        preise = parse_preis_csv(preis_csv.read(), int(jahr_auswahl), monat_auswahl)
         if preise:
             st.session_state[_preise_key] = preise
-            st.success(f"✓ {len(preise)} Preise geladen")
+            st.success(f"✓ {len(preise)} im Monat gültige Preise geladen")
         else:
-            st.error("Keine PZN/Preis-Paare erkannt. Spalten prüfen.")
+            st.error("Keine im Monat gültigen PZN/Preis-Paare erkannt. Spalten/Datum prüfen.")
     _akt_preise = st.session_state.get(_preise_key) or {}
     if _akt_preise:
         st.caption(f"Aktuell {len(_akt_preise)} Preise hinterlegt.")
