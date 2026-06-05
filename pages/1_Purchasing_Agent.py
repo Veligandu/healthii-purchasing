@@ -526,7 +526,6 @@ with st.sidebar:
         type=["xlsx"],
         help="Metabase-Export hierher ziehen oder auswählen",
         accept_multiple_files=False,
-        label_visibility="collapsed",
     )
 
     # Datei in Drive speichern (ohne Berechnung)
