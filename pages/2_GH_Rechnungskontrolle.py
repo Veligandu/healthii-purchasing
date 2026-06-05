@@ -1102,22 +1102,36 @@ else:
                 m3.metric("Differenz",  f"{diff:+.2f} €" if pd.notna(diff) else "—")
 
                 df_b = df_roh[df_roh["Beleg"] == beleg].copy()
-                edit_cols = ["PZN", "Menge", "EK_ohne_MWSt", "Warenwert"]
+                st.caption("PZN, Menge und EK eingeben — der Warenwert wird darunter automatisch berechnet.")
+                edit_cols = ["PZN", "Menge", "EK_ohne_MWSt"]
                 edited = st.data_editor(
                     df_b[edit_cols].reset_index(drop=True),
                     column_config={
                         "PZN":          st.column_config.TextColumn("PZN"),
                         "Menge":        st.column_config.NumberColumn("Menge",        min_value=0, step=1),
                         "EK_ohne_MWSt": st.column_config.NumberColumn("EK o. MWSt (€)", format="%.2f"),
-                        "Warenwert":    st.column_config.NumberColumn("Warenwert (€)", format="%.2f", disabled=True),
                     },
                     num_rows="dynamic",
                     use_container_width=True,
                     hide_index=True,
                     key=f"editor_beleg_{beleg}",
                 )
-                # Warenwert live neu berechnen
-                edited["Warenwert"] = (edited["Menge"] * edited["EK_ohne_MWSt"]).round(2)
+                # Warenwert je Zeile berechnen (Menge × EK)
+                edited["Warenwert"] = (
+                    pd.to_numeric(edited["Menge"], errors="coerce")
+                    * pd.to_numeric(edited["EK_ohne_MWSt"], errors="coerce")
+                ).round(2)
+
+                # Berechnete Positionen als Vorschau anzeigen
+                st.dataframe(
+                    edited.style.format({
+                        "Menge":        "{:.0f}",
+                        "EK_ohne_MWSt": lambda v: "—" if pd.isna(v) else f"{v:.2f} €",
+                        "Warenwert":    lambda v: "—" if pd.isna(v) else f"{v:.2f} €",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
                 # Live-Hinweis, ob die Korrektur die Abweichung schließt
                 neuer_wert = edited["Warenwert"].sum()
