@@ -592,7 +592,12 @@ with st.sidebar:
 
     # ── Letzte Bestellung Status ──
     st.header("📋 Letzte Bestellung")
-    hist_name, df_hist_sidebar = finde_letzte_bestellung(st.session_state.drive)
+    try:
+        hist_name, df_hist_sidebar = finde_letzte_bestellung(st.session_state.drive)
+        st.session_state["_hist_cache"] = (hist_name, df_hist_sidebar)
+    except Exception:
+        _cached = st.session_state.get("_hist_cache")
+        hist_name, df_hist_sidebar = _cached if _cached else (None, None)
     if df_hist_sidebar is not None:
         n_gesamt = len(df_hist_sidebar)
         n_offen  = len(df_hist_sidebar[
@@ -997,7 +1002,13 @@ with tab2:
 # ══════════════════════════════════════════════════════════════════════════════
 
 with tab3:
-    hist_name_t3, df_hist = finde_letzte_bestellung(st.session_state.drive)
+    # Cache aus Sidebar nutzen, nur bei Bedarf neu laden
+    try:
+        hist_name_t3, df_hist = finde_letzte_bestellung(st.session_state.drive)
+        st.session_state["_hist_cache"] = (hist_name_t3, df_hist)
+    except Exception:
+        _cached = st.session_state.get("_hist_cache")
+        hist_name_t3, df_hist = _cached if _cached else (None, None)
 
     if df_hist is None:
         st.info("Noch keine Bestellhistorie vorhanden.")
@@ -1022,35 +1033,46 @@ with tab3:
         col_info.caption(f"{n_offen} von {len(df_hist)} Positionen noch nicht eingelagert")
 
         def _speichere_historie_drive(df_speichern, name):
-            """Speichert die Bestellhistorie als Excel in Drive (ersetzt bestehende Datei)."""
+            """Speichert die Bestellhistorie als Excel in Drive, mit 3 Retry-Versuchen."""
+            import time as _time
             _buf = io.BytesIO()
             df_speichern.to_excel(_buf, index=False, sheet_name="Abfrageergebnis")
             _bytes = _buf.getvalue()
-            # Lokal speichern falls möglich
+            # Lokal speichern
             letzte_excel = finde_letzte_bestellung_excel()
             if letzte_excel:
                 with open(letzte_excel, "wb") as _f:
                     _f.write(_bytes)
-            # Drive: bestehende Datei suchen und überschreiben
+            # Drive mit Retry
             _drive = st.session_state.drive
-            if _drive:
-                from googleapiclient.http import MediaIoBaseUpload
-                _q = f"name='{name}' and trashed=false"
-                _res = _drive.files().list(q=_q, fields="files(id)", pageSize=1).execute()
-                _existing = _res.get("files", [])
-                _media = MediaIoBaseUpload(
-                    io.BytesIO(_bytes),
-                    mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
-                if _existing:
-                    _drive.files().update(fileId=_existing[0]["id"], media_body=_media).execute()
-                else:
-                    # Datei neu anlegen im KW-Ordner
-                    _week_folder_id = get_week_folder_id(_drive, date.today().isocalendar()[1], date.today().year)
-                    _drive.files().create(
-                        body={"name": name, "parents": [_week_folder_id]},
-                        media_body=_media,
-                    ).execute()
+            if not _drive:
+                return
+            from googleapiclient.http import MediaIoBaseUpload
+            _last_exc = None
+            for _attempt in range(3):
+                try:
+                    _q = f"name='{name}' and trashed=false"
+                    _res = _drive.files().list(q=_q, fields="files(id)", pageSize=1).execute()
+                    _existing = _res.get("files", [])
+                    _media = MediaIoBaseUpload(
+                        io.BytesIO(_bytes),
+                        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                    if _existing:
+                        _drive.files().update(fileId=_existing[0]["id"], media_body=_media).execute()
+                    else:
+                        _week_folder_id = get_week_folder_id(
+                            _drive, date.today().isocalendar()[1], date.today().year
+                        )
+                        _drive.files().create(
+                            body={"name": name, "parents": [_week_folder_id]},
+                            media_body=_media,
+                        ).execute()
+                    return  # Erfolg
+                except Exception as _e:
+                    _last_exc = _e
+                    _time.sleep(1)
+            raise _last_exc  # Alle Versuche fehlgeschlagen
 
         with col_alle:
             if st.button("✅ Alle einlagern", use_container_width=True):
