@@ -648,41 +648,8 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     # ── Algorithmus-Einstellungen ──────────────────────────────────────────────
     with st.expander("⚙️ Algorithmus"):
-        st.caption("Änderungen werden sofort gespeichert und beim nächsten **Berechnen** angewendet.")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            _w30_neu = st.slider(
-                "Gewichtung L30",
-                min_value=0, max_value=100,
-                value=int(st.session_state.get("algo_w30", 0.7) * 100),
-                step=10, format="%d%%",
-                help="Anteil der letzten 30 Tage am Tagesverbrauch",
-            )
-            st.session_state["algo_w30"] = _w30_neu / 100
-            st.session_state["algo_w90"] = 1 - _w30_neu / 100
-            st.caption(f"→ Tagesverbrauch = **{_w30_neu}% × L30/30** + **{100-_w30_neu}% × L90/90**")
 
-        with col_b:
-            _ziel_neu = st.number_input(
-                "Ziel-Reichweite (Tage)",
-                min_value=7, max_value=365,
-                value=int(st.session_state.get("algo_ziel_tage", 60)),
-                step=5,
-                help="Wie viele Tage soll der Bestand nach der Bestellung reichen?",
-            )
-            st.session_state["algo_ziel_tage"] = int(_ziel_neu)
-
-        _mbw_neu = st.number_input(
-            "Standard-MBW (€)",
-            min_value=0, max_value=50000,
-            value=int(st.session_state.get("algo_mbw_standard", 2000)),
-            step=100,
-            help="Gilt für alle Hersteller ohne eigenen Eintrag unten",
-        )
-        st.session_state["algo_mbw_standard"] = float(_mbw_neu)
-
-        # MBW-Ausnahmen Tabelle
-        st.caption("**Hersteller-Ausnahmen (mbw_exceptions.csv)**")
+        # MBW-Ausnahmen laden (außerhalb des Forms — data_editor nicht in st.form möglich)
         _drive_mbw = st.session_state.get("drive")
         _mbw_df_current = None
         if _drive_mbw:
@@ -691,7 +658,6 @@ with tab1:
                 _mbw_df_current = download_csv_from_drive(_drive_mbw, "mbw_exceptions.csv", _sid)
             except Exception:
                 pass
-
         if _mbw_df_current is None:
             _mbw_df_current = pd.DataFrame({"Hersteller": pd.Series([], dtype=str), "MBW": pd.Series([], dtype=float)})
         else:
@@ -699,6 +665,77 @@ with tab1:
             _mbw_df_current["Hersteller"] = _mbw_df_current["Hersteller"].astype(str)
             _mbw_df_current["MBW"] = pd.to_numeric(_mbw_df_current["MBW"], errors="coerce").fillna(0.0)
 
+        with st.form("algo_form"):
+            col_a, col_b = st.columns(2)
+            with col_a:
+                _w30_neu = st.slider(
+                    "Gewichtung L30",
+                    min_value=0, max_value=100,
+                    value=int(st.session_state.get("algo_w30", 0.7) * 100),
+                    step=10, format="%d%%",
+                    help="Anteil der letzten 30 Tage am Tagesverbrauch",
+                )
+                st.caption(f"→ Tagesverbrauch = **{_w30_neu}% × L30/30** + **{100-_w30_neu}% × L90/90**")
+            with col_b:
+                _ziel_neu = st.number_input(
+                    "Ziel-Reichweite (Tage)",
+                    min_value=7, max_value=365,
+                    value=int(st.session_state.get("algo_ziel_tage", 60)),
+                    step=5,
+                    help="Wie viele Tage soll der Bestand nach der Bestellung reichen?",
+                )
+
+            _mbw_neu = st.number_input(
+                "Standard-MBW (€)",
+                min_value=0, max_value=50000,
+                value=int(st.session_state.get("algo_mbw_standard", 2000)),
+                step=100,
+                help="Gilt für alle Hersteller ohne eigenen Eintrag unten",
+            )
+
+            st.divider()
+            st.markdown("**Kritische Positionsgröße**")
+            st.caption("Ist der Bestellwert einer einzelnen Position größer als der Grenzwert, wird auf das Minimum für die Mindestreichweite reduziert.")
+            col_c, col_d = st.columns(2)
+            with col_c:
+                _krit_neu = st.number_input(
+                    "Grenzwert je Position (€)",
+                    min_value=0, max_value=100000,
+                    value=int(st.session_state.get("algo_krit_pos", 0)),
+                    step=100,
+                    help="0 = deaktiviert",
+                )
+            with col_d:
+                _mind_neu = st.number_input(
+                    "Mindestreichweite (Tage)",
+                    min_value=0, max_value=365,
+                    value=int(st.session_state.get("algo_mindestreichweite", 30)),
+                    step=5,
+                    help="Mindestreichweite die nach Reduktion noch erfüllt sein muss",
+                )
+
+            _submitted = st.form_submit_button("💾 Einstellungen speichern",
+                                               use_container_width=True, type="primary")
+
+        if _submitted:
+            st.session_state["algo_w30"]              = _w30_neu / 100
+            st.session_state["algo_w90"]              = 1 - _w30_neu / 100
+            st.session_state["algo_ziel_tage"]        = int(_ziel_neu)
+            st.session_state["algo_mbw_standard"]     = float(_mbw_neu)
+            st.session_state["algo_krit_pos"]         = float(_krit_neu)
+            st.session_state["algo_mindestreichweite"] = int(_mind_neu)
+            if _drive_mbw:
+                try:
+                    _auto_save_algo()
+                    st.success("✓ Einstellungen gespeichert")
+                except Exception as _e:
+                    st.error(f"Fehler: {_e}")
+            else:
+                st.warning("Drive nicht verbunden — nur lokal gespeichert")
+
+        # MBW-Ausnahmen Tabelle (außerhalb des Forms)
+        st.divider()
+        st.caption("**Hersteller-Ausnahmen (mbw_exceptions.csv)**")
         _mbw_edited = st.data_editor(
             _mbw_df_current,
             column_config={
@@ -713,11 +750,10 @@ with tab1:
         if st.button("💾 MBW-Ausnahmen speichern", use_container_width=True):
             if _drive_mbw:
                 try:
-                    import io as _io
                     from googleapiclient.http import MediaIoBaseUpload as _MIU
                     _sid = get_stammdaten_folder_id(_drive_mbw)
                     _csv_bytes = _mbw_edited.to_csv(index=False).encode()
-                    _media = _MIU(_io.BytesIO(_csv_bytes), mimetype="text/csv")
+                    _media = _MIU(io.BytesIO(_csv_bytes), mimetype="text/csv")
                     _q = f"name='mbw_exceptions.csv' and '{_sid}' in parents and trashed=false"
                     _ex = _drive_mbw.files().list(q=_q, fields="files(id)", pageSize=1).execute().get("files", [])
                     if _ex:
@@ -727,45 +763,7 @@ with tab1:
                             body={"name": "mbw_exceptions.csv", "parents": [_sid]},
                             media_body=_media, fields="id",
                         ).execute()
-                    st.success("✓ Gespeichert")
-                except Exception as _e:
-                    st.error(f"Fehler: {_e}")
-            else:
-                st.warning("Drive nicht verbunden")
-
-        st.divider()
-        st.markdown("**Kritische Positionsgröße**")
-        st.caption("Ist der Bestellwert einer einzelnen Position größer als der Grenzwert, wird die Menge um eine Ve reduziert — solange die Mindestreichweite noch erfüllt ist.")
-        col_c, col_d = st.columns(2)
-        with col_c:
-            _krit_neu = st.number_input(
-                "Grenzwert je Position (€)",
-                min_value=0, max_value=100000,
-                value=int(st.session_state.get("algo_krit_pos", 0)),
-                step=100,
-                help="0 = deaktiviert",
-            )
-            st.session_state["algo_krit_pos"] = float(_krit_neu)
-        with col_d:
-            _mind_neu = st.number_input(
-                "Mindestreichweite (Tage)",
-                min_value=0, max_value=365,
-                value=int(st.session_state.get("algo_mindestreichweite", 30)),
-                step=5,
-                help="Mindestreichweite die nach Reduktion noch erfüllt sein muss",
-            )
-            st.session_state["algo_mindestreichweite"] = int(_mind_neu)
-        _krit = st.session_state.get("algo_krit_pos", 0)
-        _mind = st.session_state.get("algo_mindestreichweite", 30)
-        if _krit > 0:
-            st.caption(f"→ Position > {_krit:,.0f} € → Minimum für {_mind} Tage Reichweite bestellen")
-
-        # Speichern-Button
-        if st.button("💾 Einstellungen speichern", use_container_width=True, type="primary"):
-            if st.session_state.get("drive"):
-                try:
-                    _auto_save_algo()
-                    st.success("✓ Gespeichert")
+                    st.success("✓ MBW-Ausnahmen gespeichert")
                 except Exception as _e:
                     st.error(f"Fehler: {_e}")
             else:
