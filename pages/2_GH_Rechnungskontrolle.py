@@ -1183,14 +1183,24 @@ else:
                 lambda r: round(r["Menge"] * preise[r["PZN"]], 2) if r["PZN"] in preise else pd.NA,
                 axis=1,
             )
-            # Nicht bewertbare Zeilen nach oben, sonst nach Warenwert
+            # Relative Abweichung Warenwert vs. Healthii-EK-Bewertung
+            _ww  = pd.to_numeric(df_disp["Warenwert"], errors="coerce")
+            _hk  = pd.to_numeric(df_disp["Healthii EK Preise"], errors="coerce")
+            df_disp["_abw"] = (_ww - _hk).abs() / _ww.where(_ww != 0)
             df_disp["_unbewertet"] = df_disp["Healthii EK Preise"].isna()
+            # Auffällig: keine Bewertung ODER Abweichung > 50 %
+            df_disp["_flag"] = df_disp["_unbewertet"] | (df_disp["_abw"] > 0.5)
+            # Auffällige Zeilen nach oben, sonst nach Warenwert
             df_disp = (
-                df_disp.sort_values(["_unbewertet", "Warenwert"], ascending=[False, False])
+                df_disp.sort_values(["_flag", "Warenwert"], ascending=[False, False])
                 .reset_index(drop=True)
             )
 
             n_unbewertet = int(df_disp["_unbewertet"].sum())
+            n_abw = int((df_disp["_abw"] > 0.5).sum())
+            if n_abw:
+                st.warning(f"{n_abw} PZN mit über 50 % Abweichung zwischen Warenwert und "
+                           f"Healthii-EK-Bewertung — oben gelb markiert.")
             if preise and n_unbewertet:
                 st.warning(f"{n_unbewertet} von {len(df_disp)} PZN konnten nicht bewertet werden "
                            f"(kein Preis hinterlegt) — oben gelb markiert.")
@@ -1198,7 +1208,7 @@ else:
                 st.info("Keine Healthii-EK-Preise geladen — Spalte bleibt leer. "
                         "CSV links in der Sidebar hochladen.")
 
-            df_vis = df_disp.drop(columns=["_unbewertet"])
+            df_vis = df_disp.drop(columns=["_unbewertet", "_abw", "_flag"])
 
             summe_ww = df_vis["Warenwert"].sum()
             summe_hk = pd.to_numeric(df_vis["Healthii EK Preise"], errors="coerce").sum()
@@ -1210,7 +1220,13 @@ else:
 
             def _zeilen_stil(row):
                 gelb = "background-color: #FEF9C3"
-                return [gelb if pd.isna(row["Healthii EK Preise"]) else "" for _ in row]
+                hk = row["Healthii EK Preise"]
+                ww = row["Warenwert"]
+                auffaellig = (
+                    pd.isna(hk)
+                    or (pd.notna(ww) and ww != 0 and abs(ww - hk) / ww > 0.5)
+                )
+                return [gelb if auffaellig else "" for _ in row]
 
             styler = (
                 df_vis.style
