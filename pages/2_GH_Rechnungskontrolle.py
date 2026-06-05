@@ -781,303 +781,20 @@ if verarbeiten and uploads:
         for f in fehler:
             st.warning(f)
 
-# ─── Belegkontrolle ───────────────────────────────────────────────────────────
+# ─── Daten laden & in Tabs darstellen ─────────────────────────────────────────
 
-df_roh   = st.session_state.get(roh_key)
+df_roh = st.session_state.get(roh_key)
 if df_roh is None:
     df_roh = pd.DataFrame(columns=["PZN", "Menge", "EK_ohne_MWSt", "Warenwert", "Beleg", "Jahr", "Monat"])
-totals   = st.session_state.get(totals_key) or {}
-pdfs     = st.session_state.get(pdf_key) or {}
+totals = st.session_state.get(totals_key) or {}
+pdfs   = st.session_state.get(pdf_key) or {}
+preise = st.session_state.get(preise_key) or {}
+abr    = st.session_state.get(abr_key) or {}
 
 # Alle bekannten Belege (inkl. solcher ohne erkannte Positionen)
 belege_alle = sorted(set(df_roh["Beleg"].unique()) | set(totals.keys()) | set(pdfs.keys()))
 
-if belege_alle:
-    st.subheader(f"Belegkontrolle {monat_label}")
-
-    # Beleg-Übersicht aufbauen — auch Belege mit 0 Positionen
-    df_belege = pd.DataFrame({"Beleg": belege_alle})
-    if not df_roh.empty:
-        grp = (
-            df_roh.groupby("Beleg", as_index=False)
-            .agg(Positionen=("PZN", "count"), Warenwert_berechnet=("Warenwert", "sum"))
-        )
-        df_belege = df_belege.merge(grp, on="Beleg", how="left")
-    else:
-        df_belege["Positionen"] = 0
-        df_belege["Warenwert_berechnet"] = 0.0
-    df_belege["Positionen"]          = df_belege["Positionen"].fillna(0).astype(int)
-    df_belege["Warenwert_berechnet"] = df_belege["Warenwert_berechnet"].fillna(0.0)
-    df_belege["Warenwert_Beleg"]     = df_belege["Beleg"].map(totals)
-    df_belege["Differenz"]           = (
-        df_belege["Warenwert_berechnet"] - df_belege["Warenwert_Beleg"]
-    ).round(2)
-
-    def _status(r):
-        if r["Positionen"] == 0:
-            return "❌ Keine Positionen"
-        d = r["Differenz"]
-        if pd.notna(d) and abs(d) < 0.01:
-            return "✅"
-        if pd.notna(d):
-            return "⚠️ Abweichung"
-        return "❓"
-    df_belege["Status"] = df_belege.apply(_status, axis=1)
-    df_belege = df_belege.sort_values("Beleg").reset_index(drop=True)
-
-    n_ok   = int((df_belege["Status"] == "✅").sum())
-    n_abw  = int((df_belege["Status"] == "⚠️ Abweichung").sum())
-    n_leer = int((df_belege["Positionen"] == 0).sum())
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Belege", len(df_belege))
-    c2.metric("✅ OK", n_ok)
-    c3.metric("⚠️ Abweichungen", n_abw)
-    c4.metric("❌ Keine Pos.", n_leer)
-    c5.metric("Gesamtwert", f"{df_belege['Warenwert_berechnet'].sum():,.2f} €")
-
-    st.divider()
-
-    # Übersichtstabelle — Zeile anklicken, um den Beleg zu prüfen/korrigieren
-    st.caption("Zeile anklicken, um den Beleg gegen das PDF zu prüfen und zu korrigieren.")
-    df_anzeige = df_belege[
-        ["Status", "Beleg", "Positionen", "Warenwert_berechnet", "Warenwert_Beleg", "Differenz"]
-    ].reset_index(drop=True)
-    tabelle_event = st.dataframe(
-        df_anzeige,
-        column_config={
-            "Status":               st.column_config.TextColumn(""),
-            "Beleg":                st.column_config.TextColumn("Belegnr."),
-            "Positionen":           st.column_config.NumberColumn("Pos.", format="%d"),
-            "Warenwert_berechnet":  st.column_config.NumberColumn("Berechnet (€)",  format="%.2f"),
-            "Warenwert_Beleg":      st.column_config.NumberColumn("Laut Beleg (€)", format="%.2f"),
-            "Differenz":            st.column_config.NumberColumn("Differenz (€)",  format="%.2f"),
-        },
-        use_container_width=True,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key=f"belegtabelle_{jahr_auswahl}_{monat_auswahl:02d}",
-    )
-
-    # Belegkontrolle als Excel herunterladen
-    _bk_buf = io.BytesIO()
-    df_anzeige.rename(columns={
-        "Warenwert_berechnet": "Berechnet (€)",
-        "Warenwert_Beleg":     "Laut Beleg (€)",
-        "Differenz":           "Differenz (€)",
-        "Positionen":          "Pos.",
-        "Beleg":               "Belegnr.",
-    }).to_excel(_bk_buf, index=False, sheet_name="Belegkontrolle")
-    st.download_button(
-        "📥 Belegkontrolle als Excel",
-        data=_bk_buf.getvalue(),
-        file_name=f"belegkontrolle_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key=f"dl_belegkontrolle_{jahr_auswahl}_{monat_auswahl:02d}",
-    )
-
-    auswahl_zeilen = tabelle_event.selection.rows if tabelle_event.selection else []
-    aktiver_beleg  = df_anzeige.iloc[auswahl_zeilen[0]]["Beleg"] if auswahl_zeilen else None
-
-    # ─── Position korrigieren: ausgewählter Beleg + zugehöriges PDF ────────────
-    if aktiver_beleg is not None:
-        beleg = aktiver_beleg
-        zeile = df_belege[df_belege["Beleg"] == beleg].iloc[0]
-        diff      = zeile["Differenz"]
-        beleg_wert = zeile["Warenwert_Beleg"]
-        ist_ok    = zeile["Status"] == "✅"
-
-        st.divider()
-        st.subheader(f"{'✅' if ist_ok else '⚠️'} Beleg {beleg} korrigieren")
-
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Berechnet", f"{zeile['Warenwert_berechnet']:,.2f} €")
-        m2.metric("Laut Beleg", f"{beleg_wert:,.2f} €" if pd.notna(beleg_wert) else "—")
-        m3.metric("Differenz",  f"{diff:+.2f} €" if pd.notna(diff) else "—")
-
-        df_b = df_roh[df_roh["Beleg"] == beleg].copy()
-        edit_cols = ["PZN", "Menge", "EK_ohne_MWSt", "Warenwert"]
-        edited = st.data_editor(
-            df_b[edit_cols].reset_index(drop=True),
-            column_config={
-                "PZN":          st.column_config.TextColumn("PZN"),
-                "Menge":        st.column_config.NumberColumn("Menge",        min_value=0, step=1),
-                "EK_ohne_MWSt": st.column_config.NumberColumn("EK o. MWSt (€)", format="%.2f"),
-                "Warenwert":    st.column_config.NumberColumn("Warenwert (€)", format="%.2f", disabled=True),
-            },
-            num_rows="dynamic",
-            use_container_width=True,
-            hide_index=True,
-            key=f"editor_beleg_{beleg}",
-        )
-        # Warenwert live neu berechnen
-        edited["Warenwert"] = (edited["Menge"] * edited["EK_ohne_MWSt"]).round(2)
-
-        # Live-Hinweis, ob die Korrektur die Abweichung schließt
-        neuer_wert = edited["Warenwert"].sum()
-        if pd.notna(beleg_wert):
-            neue_diff = round(neuer_wert - beleg_wert, 2)
-            if abs(neue_diff) < 0.01:
-                st.success(f"Nach Korrektur stimmt der Warenwert überein ({neuer_wert:,.2f} €).")
-            else:
-                st.warning(f"Nach Korrektur weiterhin {neue_diff:+.2f} € Differenz "
-                           f"({neuer_wert:,.2f} € berechnet vs. {beleg_wert:,.2f} € laut Beleg).")
-
-        if st.button("💾 Korrekturen übernehmen", key=f"save_{beleg}", type="primary"):
-            edited = edited[edited["PZN"].notna() & (edited["PZN"].astype(str) != "")]
-            edited["Beleg"] = beleg
-            edited["Jahr"]  = df_b["Jahr"].iloc[0]  if not df_b.empty else int(jahr_auswahl)
-            edited["Monat"] = df_b["Monat"].iloc[0] if not df_b.empty else monat_auswahl
-            df_rest = df_roh[df_roh["Beleg"] != beleg]
-            st.session_state[roh_key] = pd.concat([df_rest, edited], ignore_index=True)
-            st.success(f"✓ Beleg {beleg} aktualisiert")
-            st.rerun()
-
-        # Zugehöriges Original-PDF anzeigen
-        st.markdown("##### Zugehörige Rechnung (PDF)")
-        pdfs = st.session_state.get(pdf_key) or {}
-        pdf_bytes = pdfs.get(beleg)
-        if pdf_bytes:
-            if pdf_viewer is not None:
-                pdf_viewer(
-                    pdf_bytes,
-                    width="100%",
-                    height=820,
-                    key=f"pdfview_{beleg}",
-                )
-            else:
-                # Fallback: base64-iframe (wird von manchen Browsern blockiert)
-                b64 = base64.b64encode(pdf_bytes).decode()
-                st.markdown(
-                    f'<iframe src="data:application/pdf;base64,{b64}" '
-                    f'width="100%" height="820px" '
-                    f'style="border:1px solid #E5E7EB;border-radius:10px;"></iframe>',
-                    unsafe_allow_html=True,
-                )
-            st.download_button(
-                "📥 PDF herunterladen",
-                data=pdf_bytes,
-                file_name=f"INVOICE-{beleg}.pdf",
-                mime="application/pdf",
-                key=f"dl_pdf_{beleg}",
-            )
-        else:
-            st.info("Das Original-PDF ist nur in der Sitzung verfügbar, in der es hochgeladen "
-                    "wurde. Lade die Rechnung erneut hoch, um sie hier anzuzeigen.")
-
-    # ─── Monatstabelle aggregieren & speichern ────────────────────────────────
-
-    st.divider()
-    st.subheader(f"Monatstabelle {monat_label}")
-
-    df_agg = (
-        df_roh
-        .groupby("PZN", as_index=False)
-        .agg(Menge=("Menge", "sum"), Warenwert=("Warenwert", "sum"))
-        .sort_values("Warenwert", ascending=False)
-        .reset_index(drop=True)
-    )
-    st.session_state[agg_key] = df_agg
-
-    # Healthii-EK-Bewertung: Menge × hinterlegter Preis
-    preise = st.session_state.get(preise_key) or {}
-    df_disp = df_agg.copy()
-    df_disp["Healthii EK Preise"] = df_disp.apply(
-        lambda r: round(r["Menge"] * preise[r["PZN"]], 2) if r["PZN"] in preise else pd.NA,
-        axis=1,
-    )
-    # Nicht bewertbare Zeilen nach oben, sonst nach Warenwert
-    df_disp["_unbewertet"] = df_disp["Healthii EK Preise"].isna()
-    df_disp = (
-        df_disp.sort_values(["_unbewertet", "Warenwert"], ascending=[False, False])
-        .reset_index(drop=True)
-    )
-
-    n_unbewertet = int(df_disp["_unbewertet"].sum())
-    if preise and n_unbewertet:
-        st.warning(f"{n_unbewertet} von {len(df_disp)} PZN konnten nicht bewertet werden "
-                   f"(kein Preis hinterlegt) — oben gelb markiert.")
-    elif not preise:
-        st.info("Keine Healthii-EK-Preise geladen — Spalte bleibt leer. "
-                "CSV links in der Sidebar hochladen.")
-
-    df_vis = df_disp.drop(columns=["_unbewertet"])
-
-    def _zeilen_stil(row):
-        gelb = "background-color: #FEF9C3"
-        return [gelb if pd.isna(row["Healthii EK Preise"]) else "" for _ in row]
-
-    styler = (
-        df_vis.style
-        .apply(_zeilen_stil, axis=1)
-        .format({
-            "Menge":              "{:.0f}",
-            "Warenwert":          lambda v: f"{v:.2f} €",
-            "Healthii EK Preise": lambda v: "—" if pd.isna(v) else f"{v:.2f} €",
-        })
-    )
-
-    st.dataframe(styler, use_container_width=True, hide_index=True)
-
-    col_save, col_dl = st.columns(2)
-
-    def _speichern_ausfuehren():
-        abr_session    = st.session_state.get(abr_key) or {}
-        abrpdf_session = st.session_state.get(abrpdf_key) or {}
-        speichere_monat_in_drive(
-            drive, df_agg, df_roh, totals, preise, abr_session, int(jahr_auswahl), monat_auswahl
-        )
-        pdfs_session = st.session_state.get(pdf_key) or {}
-        speichere_pdfs_in_drive(drive, pdfs_session, int(jahr_auswahl), monat_auswahl)
-        speichere_abr_pdfs_in_drive(drive, abrpdf_session, int(jahr_auswahl), monat_auswahl)
-        return len(pdfs_session)
-
-    confirm_key = f"gh_confirm_overwrite_{jahr_auswahl}_{monat_auswahl:02d}"
-
-    def _speichern_mit_feedback(prefix="✓"):
-        try:
-            with st.spinner("Speichere in Drive … (PDFs werden hochgeladen)"):
-                n = _speichern_ausfuehren()
-            st.success(f"{prefix} Monatstabelle, Rohdaten und {n} PDF(s) in Drive gespeichert")
-        except Exception as e:
-            st.error(f"Drive-Fehler: {e}")
-
-    with col_save:
-        if drive and st.button("💾 In Drive speichern", use_container_width=True, type="primary"):
-            if monat_existiert_in_drive(drive, int(jahr_auswahl), monat_auswahl):
-                st.session_state[confirm_key] = True   # nachfragen
-                st.rerun()
-            else:
-                _speichern_mit_feedback()
-
-    # Überschreiben-Abfrage
-    if st.session_state.get(confirm_key):
-        st.warning(f"Für **{monat_label}** existiert bereits eine Speicherung in Drive. "
-                   f"Überschreiben?")
-        col_ja, col_nein = st.columns(2)
-        if col_ja.button("Ja, überschreiben", type="primary",
-                         use_container_width=True, key=f"ow_yes_{confirm_key}"):
-            st.session_state[confirm_key] = False
-            _speichern_mit_feedback(prefix="✓ Überschrieben —")
-        if col_nein.button("Abbrechen", use_container_width=True, key=f"ow_no_{confirm_key}"):
-            st.session_state[confirm_key] = False
-            st.rerun()
-
-    with col_dl:
-        _buf = io.BytesIO()
-        with pd.ExcelWriter(_buf, engine="openpyxl") as _w:
-            _sheet = f"Monat {monat_auswahl:02d}-{jahr_auswahl}"
-            df_vis.to_excel(_w, index=False, sheet_name=_sheet)
-            df_belege.to_excel(_w, index=False, sheet_name="Belegkontrolle")
-        st.download_button(
-            label="📥 Excel herunterladen",
-            data=_buf.getvalue(),
-            file_name=f"gh_rechnung_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-
-else:
+if not belege_alle and not abr:
     st.markdown("""
     <div style='text-align:center;padding:80px 0;color:#9CA3AF;'>
         <div style='font-size:48px;'>📄</div>
@@ -1085,82 +802,384 @@ else:
             Monat auswählen und PDFs hochladen — oder gespeicherten Monat links anklicken
         </div>
     </div>""", unsafe_allow_html=True)
-
-# ─── Abgleich mit Monatsabrechnung ────────────────────────────────────────────
-
-abr = st.session_state.get(abr_key) or {}
-if abr:
-    st.divider()
-    st.subheader(f"Abgleich Monatsabrechnung {monat_label}")
-
-    # Vorhandene Belegnummern dieses Monats
-    _df_roh = st.session_state.get(roh_key)
-    belege_vorhanden = set()
-    if _df_roh is not None and not _df_roh.empty:
-        belege_vorhanden |= set(_df_roh["Beleg"].astype(str))
-    belege_vorhanden |= {str(b) for b in (st.session_state.get(totals_key) or {})}
-    belege_vorhanden |= {str(b) for b in (st.session_state.get(pdf_key) or {})}
-
-    df_abr = pd.DataFrame(
-        [{"Rechnungsnr": str(n), "Betrag laut Abrechnung": b} for n, b in abr.items()]
-    )
-    df_abr["Vorhanden"] = df_abr["Rechnungsnr"].apply(
-        lambda n: "✅ vorhanden" if n in belege_vorhanden else "❌ fehlt"
-    )
-    df_abr = df_abr.sort_values(["Vorhanden", "Rechnungsnr"]).reset_index(drop=True)
-
-    fehlend  = df_abr[df_abr["Vorhanden"] == "❌ fehlt"]
-    n_fehlend = len(fehlend)
-    summe_fehlend = fehlend["Betrag laut Abrechnung"].sum()
-
-    # Belege, die wir haben, aber die in keiner Abrechnung stehen (Gegenkontrolle)
-    extra = sorted(belege_vorhanden - set(df_abr["Rechnungsnr"]))
-
-    a1, a2, a3, a4 = st.columns(4)
-    a1.metric("Abgerechnet", len(df_abr))
-    a2.metric("✅ Vorhanden", int((df_abr["Vorhanden"] == "✅ vorhanden").sum()))
-    a3.metric("❌ Fehlend", n_fehlend)
-    a4.metric("Summe fehlend", f"{summe_fehlend:,.2f} €")
-
-    if n_fehlend:
-        st.warning(f"{n_fehlend} laut Abrechnung berechnete Belege fehlen "
-                   f"(Summe {summe_fehlend:,.2f} €) — siehe ❌ in der Tabelle.")
-    else:
-        st.success("Alle laut Abrechnung berechneten Belege sind vorhanden.")
-
-    def _abr_stil(row):
-        rot = "background-color: #FEE2E2"
-        return [rot if row["Vorhanden"] == "❌ fehlt" else "" for _ in row]
-
-    styler_abr = (
-        df_abr.style.apply(_abr_stil, axis=1)
-        .format({"Betrag laut Abrechnung": lambda v: f"{v:,.2f} €"})
-    )
-    st.dataframe(styler_abr, use_container_width=True, hide_index=True)
-
-    _abr_buf = io.BytesIO()
-    df_abr.to_excel(_abr_buf, index=False, sheet_name="Abrechnungsabgleich")
-    st.download_button(
-        "📥 Abgleich als Excel",
-        data=_abr_buf.getvalue(),
-        file_name=f"abrechnungsabgleich_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key=f"dl_abr_{jahr_auswahl}_{monat_auswahl:02d}",
+else:
+    tab_abgleich, tab_beleg, tab_monat = st.tabs(
+        ["📑 Abgleich Monatsabrechnung", "🧾 Belegkontrolle", "📊 Monatstabelle"]
     )
 
-    if extra:
-        st.caption(f"ℹ️ {len(extra)} vorhandene Belege stehen in keiner Abrechnung: "
-                   f"{', '.join(extra[:30])}{' …' if len(extra) > 30 else ''}")
+    # ════ Tab 1: Abgleich Monatsabrechnung ════
+    with tab_abgleich:
+        if abr:
+            st.divider()
+            st.subheader(f"Abgleich Monatsabrechnung {monat_label}")
 
-    # Hinterlegte Abrechnungs-PDFs anzeigen/herunterladen
-    abr_pdfs = st.session_state.get(abrpdf_key) or {}
-    if abr_pdfs:
-        with st.expander(f"📑 {len(abr_pdfs)} Abrechnungs-PDF(s)"):
-            for _name, _raw in abr_pdfs.items():
-                st.download_button(
-                    f"📥 {_name}",
-                    data=_raw,
-                    file_name=_name,
-                    mime="application/pdf",
-                    key=f"dl_abrpdf_{jahr_auswahl}_{monat_auswahl:02d}_{_name}",
+            # Vorhandene Belegnummern dieses Monats
+            _df_roh = st.session_state.get(roh_key)
+            belege_vorhanden = set()
+            if _df_roh is not None and not _df_roh.empty:
+                belege_vorhanden |= set(_df_roh["Beleg"].astype(str))
+            belege_vorhanden |= {str(b) for b in (st.session_state.get(totals_key) or {})}
+            belege_vorhanden |= {str(b) for b in (st.session_state.get(pdf_key) or {})}
+
+            df_abr = pd.DataFrame(
+                [{"Rechnungsnr": str(n), "Betrag laut Abrechnung": b} for n, b in abr.items()]
+            )
+            df_abr["Vorhanden"] = df_abr["Rechnungsnr"].apply(
+                lambda n: "✅ vorhanden" if n in belege_vorhanden else "❌ fehlt"
+            )
+            df_abr = df_abr.sort_values(["Vorhanden", "Rechnungsnr"]).reset_index(drop=True)
+
+            fehlend  = df_abr[df_abr["Vorhanden"] == "❌ fehlt"]
+            n_fehlend = len(fehlend)
+            summe_fehlend = fehlend["Betrag laut Abrechnung"].sum()
+
+            # Belege, die wir haben, aber die in keiner Abrechnung stehen (Gegenkontrolle)
+            extra = sorted(belege_vorhanden - set(df_abr["Rechnungsnr"]))
+
+            a1, a2, a3, a4 = st.columns(4)
+            a1.metric("Abgerechnet", len(df_abr))
+            a2.metric("✅ Vorhanden", int((df_abr["Vorhanden"] == "✅ vorhanden").sum()))
+            a3.metric("❌ Fehlend", n_fehlend)
+            a4.metric("Summe fehlend", f"{summe_fehlend:,.2f} €")
+
+            if n_fehlend:
+                st.warning(f"{n_fehlend} laut Abrechnung berechnete Belege fehlen "
+                           f"(Summe {summe_fehlend:,.2f} €) — siehe ❌ in der Tabelle.")
+            else:
+                st.success("Alle laut Abrechnung berechneten Belege sind vorhanden.")
+
+            def _abr_stil(row):
+                rot = "background-color: #FEE2E2"
+                return [rot if row["Vorhanden"] == "❌ fehlt" else "" for _ in row]
+
+            styler_abr = (
+                df_abr.style.apply(_abr_stil, axis=1)
+                .format({"Betrag laut Abrechnung": lambda v: f"{v:,.2f} €"})
+            )
+            st.dataframe(styler_abr, use_container_width=True, hide_index=True)
+
+            _abr_buf = io.BytesIO()
+            df_abr.to_excel(_abr_buf, index=False, sheet_name="Abrechnungsabgleich")
+            st.download_button(
+                "📥 Abgleich als Excel",
+                data=_abr_buf.getvalue(),
+                file_name=f"abrechnungsabgleich_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dl_abr_{jahr_auswahl}_{monat_auswahl:02d}",
+            )
+
+            if extra:
+                st.caption(f"ℹ️ {len(extra)} vorhandene Belege stehen in keiner Abrechnung: "
+                           f"{', '.join(extra[:30])}{' …' if len(extra) > 30 else ''}")
+
+            # Hinterlegte Abrechnungs-PDFs anzeigen/herunterladen
+            abr_pdfs = st.session_state.get(abrpdf_key) or {}
+            if abr_pdfs:
+                with st.expander(f"📑 {len(abr_pdfs)} Abrechnungs-PDF(s)"):
+                    for _name, _raw in abr_pdfs.items():
+                        st.download_button(
+                            f"📥 {_name}",
+                            data=_raw,
+                            file_name=_name,
+                            mime="application/pdf",
+                            key=f"dl_abrpdf_{jahr_auswahl}_{monat_auswahl:02d}_{_name}",
+                        )
+
+        else:
+            st.info("Noch keine Monatsabrechnungen geladen — links in der Sidebar die Abrechnungen (PDF) hochladen und „▶ Abrechnungen einlesen“ klicken.")
+
+    # ════ Tab 2: Belegkontrolle ════
+    with tab_beleg:
+        if belege_alle:
+            st.subheader(f"Belegkontrolle {monat_label}")
+
+            # Beleg-Übersicht aufbauen — auch Belege mit 0 Positionen
+            df_belege = pd.DataFrame({"Beleg": belege_alle})
+            if not df_roh.empty:
+                grp = (
+                    df_roh.groupby("Beleg", as_index=False)
+                    .agg(Positionen=("PZN", "count"), Warenwert_berechnet=("Warenwert", "sum"))
                 )
+                df_belege = df_belege.merge(grp, on="Beleg", how="left")
+            else:
+                df_belege["Positionen"] = 0
+                df_belege["Warenwert_berechnet"] = 0.0
+            df_belege["Positionen"]          = df_belege["Positionen"].fillna(0).astype(int)
+            df_belege["Warenwert_berechnet"] = df_belege["Warenwert_berechnet"].fillna(0.0)
+            df_belege["Warenwert_Beleg"]     = df_belege["Beleg"].map(totals)
+            df_belege["Differenz"]           = (
+                df_belege["Warenwert_berechnet"] - df_belege["Warenwert_Beleg"]
+            ).round(2)
+
+            def _status(r):
+                if r["Positionen"] == 0:
+                    return "❌ Keine Positionen"
+                d = r["Differenz"]
+                if pd.notna(d) and abs(d) < 0.01:
+                    return "✅"
+                if pd.notna(d):
+                    return "⚠️ Abweichung"
+                return "❓"
+            df_belege["Status"] = df_belege.apply(_status, axis=1)
+            df_belege = df_belege.sort_values("Beleg").reset_index(drop=True)
+
+            n_ok   = int((df_belege["Status"] == "✅").sum())
+            n_abw  = int((df_belege["Status"] == "⚠️ Abweichung").sum())
+            n_leer = int((df_belege["Positionen"] == 0).sum())
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Belege", len(df_belege))
+            c2.metric("✅ OK", n_ok)
+            c3.metric("⚠️ Abweichungen", n_abw)
+            c4.metric("❌ Keine Pos.", n_leer)
+            c5.metric("Gesamtwert", f"{df_belege['Warenwert_berechnet'].sum():,.2f} €")
+
+            st.divider()
+
+            # Übersichtstabelle — Zeile anklicken, um den Beleg zu prüfen/korrigieren
+            st.caption("Zeile anklicken, um den Beleg gegen das PDF zu prüfen und zu korrigieren.")
+            df_anzeige = df_belege[
+                ["Status", "Beleg", "Positionen", "Warenwert_berechnet", "Warenwert_Beleg", "Differenz"]
+            ].reset_index(drop=True)
+            tabelle_event = st.dataframe(
+                df_anzeige,
+                column_config={
+                    "Status":               st.column_config.TextColumn(""),
+                    "Beleg":                st.column_config.TextColumn("Belegnr."),
+                    "Positionen":           st.column_config.NumberColumn("Pos.", format="%d"),
+                    "Warenwert_berechnet":  st.column_config.NumberColumn("Berechnet (€)",  format="%.2f"),
+                    "Warenwert_Beleg":      st.column_config.NumberColumn("Laut Beleg (€)", format="%.2f"),
+                    "Differenz":            st.column_config.NumberColumn("Differenz (€)",  format="%.2f"),
+                },
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key=f"belegtabelle_{jahr_auswahl}_{monat_auswahl:02d}",
+            )
+
+            # Belegkontrolle als Excel herunterladen
+            _bk_buf = io.BytesIO()
+            df_anzeige.rename(columns={
+                "Warenwert_berechnet": "Berechnet (€)",
+                "Warenwert_Beleg":     "Laut Beleg (€)",
+                "Differenz":           "Differenz (€)",
+                "Positionen":          "Pos.",
+                "Beleg":               "Belegnr.",
+            }).to_excel(_bk_buf, index=False, sheet_name="Belegkontrolle")
+            st.download_button(
+                "📥 Belegkontrolle als Excel",
+                data=_bk_buf.getvalue(),
+                file_name=f"belegkontrolle_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dl_belegkontrolle_{jahr_auswahl}_{monat_auswahl:02d}",
+            )
+
+            auswahl_zeilen = tabelle_event.selection.rows if tabelle_event.selection else []
+            aktiver_beleg  = df_anzeige.iloc[auswahl_zeilen[0]]["Beleg"] if auswahl_zeilen else None
+
+            # ─── Position korrigieren: ausgewählter Beleg + zugehöriges PDF ────────────
+            if aktiver_beleg is not None:
+                beleg = aktiver_beleg
+                zeile = df_belege[df_belege["Beleg"] == beleg].iloc[0]
+                diff      = zeile["Differenz"]
+                beleg_wert = zeile["Warenwert_Beleg"]
+                ist_ok    = zeile["Status"] == "✅"
+
+                st.divider()
+                st.subheader(f"{'✅' if ist_ok else '⚠️'} Beleg {beleg} korrigieren")
+
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Berechnet", f"{zeile['Warenwert_berechnet']:,.2f} €")
+                m2.metric("Laut Beleg", f"{beleg_wert:,.2f} €" if pd.notna(beleg_wert) else "—")
+                m3.metric("Differenz",  f"{diff:+.2f} €" if pd.notna(diff) else "—")
+
+                df_b = df_roh[df_roh["Beleg"] == beleg].copy()
+                edit_cols = ["PZN", "Menge", "EK_ohne_MWSt", "Warenwert"]
+                edited = st.data_editor(
+                    df_b[edit_cols].reset_index(drop=True),
+                    column_config={
+                        "PZN":          st.column_config.TextColumn("PZN"),
+                        "Menge":        st.column_config.NumberColumn("Menge",        min_value=0, step=1),
+                        "EK_ohne_MWSt": st.column_config.NumberColumn("EK o. MWSt (€)", format="%.2f"),
+                        "Warenwert":    st.column_config.NumberColumn("Warenwert (€)", format="%.2f", disabled=True),
+                    },
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    hide_index=True,
+                    key=f"editor_beleg_{beleg}",
+                )
+                # Warenwert live neu berechnen
+                edited["Warenwert"] = (edited["Menge"] * edited["EK_ohne_MWSt"]).round(2)
+
+                # Live-Hinweis, ob die Korrektur die Abweichung schließt
+                neuer_wert = edited["Warenwert"].sum()
+                if pd.notna(beleg_wert):
+                    neue_diff = round(neuer_wert - beleg_wert, 2)
+                    if abs(neue_diff) < 0.01:
+                        st.success(f"Nach Korrektur stimmt der Warenwert überein ({neuer_wert:,.2f} €).")
+                    else:
+                        st.warning(f"Nach Korrektur weiterhin {neue_diff:+.2f} € Differenz "
+                                   f"({neuer_wert:,.2f} € berechnet vs. {beleg_wert:,.2f} € laut Beleg).")
+
+                if st.button("💾 Korrekturen übernehmen", key=f"save_{beleg}", type="primary"):
+                    edited = edited[edited["PZN"].notna() & (edited["PZN"].astype(str) != "")]
+                    edited["Beleg"] = beleg
+                    edited["Jahr"]  = df_b["Jahr"].iloc[0]  if not df_b.empty else int(jahr_auswahl)
+                    edited["Monat"] = df_b["Monat"].iloc[0] if not df_b.empty else monat_auswahl
+                    df_rest = df_roh[df_roh["Beleg"] != beleg]
+                    st.session_state[roh_key] = pd.concat([df_rest, edited], ignore_index=True)
+                    st.success(f"✓ Beleg {beleg} aktualisiert")
+                    st.rerun()
+
+                # Zugehöriges Original-PDF anzeigen
+                st.markdown("##### Zugehörige Rechnung (PDF)")
+                pdfs = st.session_state.get(pdf_key) or {}
+                pdf_bytes = pdfs.get(beleg)
+                if pdf_bytes:
+                    if pdf_viewer is not None:
+                        pdf_viewer(
+                            pdf_bytes,
+                            width="100%",
+                            height=820,
+                            key=f"pdfview_{beleg}",
+                        )
+                    else:
+                        # Fallback: base64-iframe (wird von manchen Browsern blockiert)
+                        b64 = base64.b64encode(pdf_bytes).decode()
+                        st.markdown(
+                            f'<iframe src="data:application/pdf;base64,{b64}" '
+                            f'width="100%" height="820px" '
+                            f'style="border:1px solid #E5E7EB;border-radius:10px;"></iframe>',
+                            unsafe_allow_html=True,
+                        )
+                    st.download_button(
+                        "📥 PDF herunterladen",
+                        data=pdf_bytes,
+                        file_name=f"INVOICE-{beleg}.pdf",
+                        mime="application/pdf",
+                        key=f"dl_pdf_{beleg}",
+                    )
+                else:
+                    st.info("Das Original-PDF ist nur in der Sitzung verfügbar, in der es hochgeladen "
+                            "wurde. Lade die Rechnung erneut hoch, um sie hier anzuzeigen.")
+
+        else:
+            st.info("Noch keine Belege für diesen Monat — links Sammelrechnungen hochladen.")
+
+    # ════ Tab 3: Monatstabelle ════
+    with tab_monat:
+        if belege_alle:
+            # ─── Monatstabelle aggregieren & speichern ────────────────────────────────
+
+            st.divider()
+            st.subheader(f"Monatstabelle {monat_label}")
+
+            df_agg = (
+                df_roh
+                .groupby("PZN", as_index=False)
+                .agg(Menge=("Menge", "sum"), Warenwert=("Warenwert", "sum"))
+                .sort_values("Warenwert", ascending=False)
+                .reset_index(drop=True)
+            )
+            st.session_state[agg_key] = df_agg
+
+            # Healthii-EK-Bewertung: Menge × hinterlegter Preis
+            preise = st.session_state.get(preise_key) or {}
+            df_disp = df_agg.copy()
+            df_disp["Healthii EK Preise"] = df_disp.apply(
+                lambda r: round(r["Menge"] * preise[r["PZN"]], 2) if r["PZN"] in preise else pd.NA,
+                axis=1,
+            )
+            # Nicht bewertbare Zeilen nach oben, sonst nach Warenwert
+            df_disp["_unbewertet"] = df_disp["Healthii EK Preise"].isna()
+            df_disp = (
+                df_disp.sort_values(["_unbewertet", "Warenwert"], ascending=[False, False])
+                .reset_index(drop=True)
+            )
+
+            n_unbewertet = int(df_disp["_unbewertet"].sum())
+            if preise and n_unbewertet:
+                st.warning(f"{n_unbewertet} von {len(df_disp)} PZN konnten nicht bewertet werden "
+                           f"(kein Preis hinterlegt) — oben gelb markiert.")
+            elif not preise:
+                st.info("Keine Healthii-EK-Preise geladen — Spalte bleibt leer. "
+                        "CSV links in der Sidebar hochladen.")
+
+            df_vis = df_disp.drop(columns=["_unbewertet"])
+
+            def _zeilen_stil(row):
+                gelb = "background-color: #FEF9C3"
+                return [gelb if pd.isna(row["Healthii EK Preise"]) else "" for _ in row]
+
+            styler = (
+                df_vis.style
+                .apply(_zeilen_stil, axis=1)
+                .format({
+                    "Menge":              "{:.0f}",
+                    "Warenwert":          lambda v: f"{v:.2f} €",
+                    "Healthii EK Preise": lambda v: "—" if pd.isna(v) else f"{v:.2f} €",
+                })
+            )
+
+            st.dataframe(styler, use_container_width=True, hide_index=True)
+
+            col_save, col_dl = st.columns(2)
+
+            def _speichern_ausfuehren():
+                abr_session    = st.session_state.get(abr_key) or {}
+                abrpdf_session = st.session_state.get(abrpdf_key) or {}
+                speichere_monat_in_drive(
+                    drive, df_agg, df_roh, totals, preise, abr_session, int(jahr_auswahl), monat_auswahl
+                )
+                pdfs_session = st.session_state.get(pdf_key) or {}
+                speichere_pdfs_in_drive(drive, pdfs_session, int(jahr_auswahl), monat_auswahl)
+                speichere_abr_pdfs_in_drive(drive, abrpdf_session, int(jahr_auswahl), monat_auswahl)
+                return len(pdfs_session)
+
+            confirm_key = f"gh_confirm_overwrite_{jahr_auswahl}_{monat_auswahl:02d}"
+
+            def _speichern_mit_feedback(prefix="✓"):
+                try:
+                    with st.spinner("Speichere in Drive … (PDFs werden hochgeladen)"):
+                        n = _speichern_ausfuehren()
+                    st.success(f"{prefix} Monatstabelle, Rohdaten und {n} PDF(s) in Drive gespeichert")
+                except Exception as e:
+                    st.error(f"Drive-Fehler: {e}")
+
+            with col_save:
+                if drive and st.button("💾 In Drive speichern", use_container_width=True, type="primary"):
+                    if monat_existiert_in_drive(drive, int(jahr_auswahl), monat_auswahl):
+                        st.session_state[confirm_key] = True   # nachfragen
+                        st.rerun()
+                    else:
+                        _speichern_mit_feedback()
+
+            # Überschreiben-Abfrage
+            if st.session_state.get(confirm_key):
+                st.warning(f"Für **{monat_label}** existiert bereits eine Speicherung in Drive. "
+                           f"Überschreiben?")
+                col_ja, col_nein = st.columns(2)
+                if col_ja.button("Ja, überschreiben", type="primary",
+                                 use_container_width=True, key=f"ow_yes_{confirm_key}"):
+                    st.session_state[confirm_key] = False
+                    _speichern_mit_feedback(prefix="✓ Überschrieben —")
+                if col_nein.button("Abbrechen", use_container_width=True, key=f"ow_no_{confirm_key}"):
+                    st.session_state[confirm_key] = False
+                    st.rerun()
+
+            with col_dl:
+                _buf = io.BytesIO()
+                with pd.ExcelWriter(_buf, engine="openpyxl") as _w:
+                    _sheet = f"Monat {monat_auswahl:02d}-{jahr_auswahl}"
+                    df_vis.to_excel(_w, index=False, sheet_name=_sheet)
+                    df_belege.to_excel(_w, index=False, sheet_name="Belegkontrolle")
+                st.download_button(
+                    label="📥 Excel herunterladen",
+                    data=_buf.getvalue(),
+                    file_name=f"gh_rechnung_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+
+        else:
+            st.info("Noch keine Belege für diesen Monat — links Sammelrechnungen hochladen.")
