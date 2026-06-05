@@ -1214,7 +1214,41 @@ else:
                 })
             )
 
-            st.dataframe(styler, use_container_width=True, hide_index=True)
+            st.caption("Zeile anklicken, um alle Einzelpositionen dieser PZN im Monat zu sehen.")
+            monat_event = st.dataframe(
+                styler, use_container_width=True, hide_index=True,
+                on_select="rerun", selection_mode="single-row",
+                key=f"monatstabelle_{jahr_auswahl}_{monat_auswahl:02d}",
+            )
+
+            _msel = monat_event.selection.rows if monat_event.selection else []
+            if _msel:
+                _pzn = df_vis.iloc[_msel[0]]["PZN"]
+                st.markdown(f"##### Einzelpositionen PZN {_pzn}")
+
+                # Lieferdatum je Beleg aus den Abrechnungsdaten
+                beleg_datum = {str(n): _abr_norm(v)[0] for n, v in abr.items()}
+                det = df_roh[df_roh["PZN"] == _pzn].copy()
+                det["Datum"] = det["Beleg"].astype(str).map(beleg_datum)
+                det = det[["Datum", "Beleg", "Menge", "EK_ohne_MWSt"]]
+                det["_dt"] = pd.to_datetime(det["Datum"], errors="coerce")
+                det = det.sort_values(["_dt", "Beleg"], na_position="last").drop(columns="_dt")
+
+                st.dataframe(
+                    det.style.format({
+                        "Datum":        lambda v: "—" if not v or pd.isna(v)
+                        else pd.to_datetime(v).strftime("%d.%m.%Y"),
+                        "Menge":        "{:.0f}",
+                        "EK_ohne_MWSt": lambda v: "—" if pd.isna(v) else f"{v:.2f} €",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Beleg":        st.column_config.TextColumn("Belegnr."),
+                        "EK_ohne_MWSt": st.column_config.Column("EK o. MWSt"),
+                    },
+                )
+                st.caption(f"Summe Menge: {int(det['Menge'].sum())} · {len(det)} Position(en)")
 
             _buf = io.BytesIO()
             with pd.ExcelWriter(_buf, engine="openpyxl") as _w:
