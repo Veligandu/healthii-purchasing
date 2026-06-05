@@ -1212,10 +1212,11 @@ else:
 
             summe_ww = df_vis["Warenwert"].sum()
             summe_hk = pd.to_numeric(df_vis["Healthii EK Preise"], errors="coerce").sum()
-            mc1, mc2 = st.columns(2)
+            mc1, mc2, mc3 = st.columns(3)
             mc1.metric("Warenwert GH-Rechnungen", f"{summe_ww:,.2f} €")
             mc2.metric("Summe Healthii-EK-Preise",
                        f"{summe_hk:,.2f} €" if preise else "—")
+            mc3.metric("Unterschiedliche PZN", f"{df_vis['PZN'].nunique():,}")
             st.divider()
 
             def _zeilen_stil(row):
