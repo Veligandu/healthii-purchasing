@@ -261,10 +261,10 @@ def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, preise, abr, jahr, 
         ).execute()
 
 
-def get_pdf_folder_id(_drive, jahr, monat, anlegen=True):
-    """ID des Monats-PDF-Unterordners in 'GH-Rechnungen'. None falls fehlend und anlegen=False."""
+def get_pdf_folder_id(_drive, jahr, monat, anlegen=True, prefix="pdfs"):
+    """ID eines Monats-Unterordners in 'GH-Rechnungen'. None falls fehlend und anlegen=False."""
     parent = get_gh_folder_id(_drive)
-    fname = f"pdfs_{jahr}_{monat:02d}"
+    fname = f"{prefix}_{jahr}_{monat:02d}"
     q = (f"name='{fname}' and '{parent}' in parents "
          f"and mimeType='application/vnd.google-apps.folder' and trashed=false")
     res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
@@ -322,6 +322,50 @@ def lade_pdfs_aus_drive(_drive, jahr, monat):
             while not done:
                 _, done = dl.next_chunk()
             out[beleg] = buf.getvalue()
+    except Exception:
+        pass
+    return out
+
+
+def speichere_abr_pdfs_in_drive(_drive, pdfs, jahr, monat):
+    """Speichert die Monatsabrechnungs-PDFs (dict dateiname → bytes) im Unterordner."""
+    from googleapiclient.http import MediaIoBaseUpload
+    if not pdfs:
+        return
+    folder_id = get_pdf_folder_id(_drive, jahr, monat, anlegen=True, prefix="abrechnungen")
+    for name, raw in pdfs.items():
+        name = str(name).replace("'", "_")
+        media = MediaIoBaseUpload(io.BytesIO(raw), mimetype="application/pdf")
+        q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
+        existing = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
+        if existing:
+            _drive.files().update(fileId=existing[0]["id"], media_body=media).execute()
+        else:
+            _drive.files().create(
+                body={"name": name, "parents": [folder_id]},
+                media_body=media, fields="id",
+            ).execute()
+
+
+def lade_abr_pdfs_aus_drive(_drive, jahr, monat):
+    """Lädt die Monatsabrechnungs-PDFs des Monats. Gibt dict dateiname → bytes zurück."""
+    from googleapiclient.http import MediaIoBaseDownload
+    out = {}
+    try:
+        folder_id = get_pdf_folder_id(_drive, jahr, monat, anlegen=False, prefix="abrechnungen")
+        if not folder_id:
+            return out
+        res = _drive.files().list(
+            q=f"'{folder_id}' in parents and trashed=false and mimeType='application/pdf'",
+            fields="files(id,name)", pageSize=200,
+        ).execute()
+        for f in res.get("files", []):
+            buf = io.BytesIO()
+            dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=f["id"]))
+            done = False
+            while not done:
+                _, done = dl.next_chunk()
+            out[f["name"]] = buf.getvalue()
     except Exception:
         pass
     return out
@@ -584,18 +628,23 @@ with st.sidebar:
         help="Die GH-Monatsabrechnungen (z. B. 10., 20., Ultimo) auf einmal auswählen.",
         key=f"abr_upload_{jahr_auswahl}_{monat_auswahl:02d}",
     )
+    _abrpdf_key = f"gh_abrpdfs_{jahr_auswahl}_{monat_auswahl:02d}"
     if st.button("▶ Abrechnungen einlesen", use_container_width=True, disabled=not abr_uploads):
-        abr_neu = dict(st.session_state.get(_abr_key) or {})
+        abr_neu    = dict(st.session_state.get(_abr_key) or {})
+        abrpdf_neu = dict(st.session_state.get(_abrpdf_key) or {})
         n_dok = 0
         for f in abr_uploads:
             try:
-                gefunden = parse_abrechnung(f.read())
+                raw = f.read()
+                gefunden = parse_abrechnung(raw)
                 abr_neu.update(gefunden)
+                abrpdf_neu[f.name] = raw
                 n_dok += 1
             except Exception as e:
                 st.warning(f"❌ {f.name}: {e}")
         if abr_neu:
-            st.session_state[_abr_key] = abr_neu
+            st.session_state[_abr_key]    = abr_neu
+            st.session_state[_abrpdf_key] = abrpdf_neu
             st.success(f"✓ {n_dok} Abrechnung(en) gelesen — {len(abr_neu)} Rechnungsnummern")
         else:
             st.error("Keine Rechnungsnummern erkannt.")
@@ -603,7 +652,8 @@ with st.sidebar:
     if _akt_abr:
         st.caption(f"Aktuell {len(_akt_abr)} abgerechnete Rechnungsnummern.")
         if st.button("🗑 Abrechnungen zurücksetzen", use_container_width=True):
-            st.session_state[_abr_key] = {}
+            st.session_state[_abr_key]    = {}
+            st.session_state[_abrpdf_key] = {}
             st.rerun()
 
     st.divider()
@@ -652,8 +702,9 @@ agg_key    = f"gh_agg_{jahr_auswahl}_{monat_auswahl:02d}"    # aggregierte Monat
 pdf_key    = f"gh_pdfs_{jahr_auswahl}_{monat_auswahl:02d}"   # Original-PDF-Bytes pro Beleg
 preise_key = f"gh_preise_{jahr_auswahl}_{monat_auswahl:02d}" # PZN → Healthii-EK-Preis
 abr_key    = f"gh_abr_{jahr_auswahl}_{monat_auswahl:02d}"    # Rechnungsnr → Betrag laut Abrechnung
+abrpdf_key = f"gh_abrpdfs_{jahr_auswahl}_{monat_auswahl:02d}" # Abrechnungs-PDFs (dateiname → bytes)
 
-for k in [roh_key, totals_key, agg_key, pdf_key, preise_key, abr_key]:
+for k in [roh_key, totals_key, agg_key, pdf_key, preise_key, abr_key, abrpdf_key]:
     if k not in st.session_state:
         st.session_state[k] = None
 
@@ -673,6 +724,7 @@ if drive and st.session_state[roh_key] is None and not st.session_state.get(load
         st.session_state[preise_key] = preise_drive
         st.session_state[abr_key]    = abr_drive
         st.session_state[pdf_key]    = lade_pdfs_aus_drive(drive, int(jahr_auswahl), monat_auswahl)
+        st.session_state[abrpdf_key] = lade_abr_pdfs_aus_drive(drive, int(jahr_auswahl), monat_auswahl)
     st.session_state[load_flag] = True
 
 # ─── PDFs einlesen ────────────────────────────────────────────────────────────
@@ -970,12 +1022,14 @@ if belege_alle:
     col_save, col_dl = st.columns(2)
 
     def _speichern_ausfuehren():
-        abr_session = st.session_state.get(abr_key) or {}
+        abr_session    = st.session_state.get(abr_key) or {}
+        abrpdf_session = st.session_state.get(abrpdf_key) or {}
         speichere_monat_in_drive(
             drive, df_agg, df_roh, totals, preise, abr_session, int(jahr_auswahl), monat_auswahl
         )
         pdfs_session = st.session_state.get(pdf_key) or {}
         speichere_pdfs_in_drive(drive, pdfs_session, int(jahr_auswahl), monat_auswahl)
+        speichere_abr_pdfs_in_drive(drive, abrpdf_session, int(jahr_auswahl), monat_auswahl)
         return len(pdfs_session)
 
     confirm_key = f"gh_confirm_overwrite_{jahr_auswahl}_{monat_auswahl:02d}"
@@ -1097,3 +1151,16 @@ if abr:
     if extra:
         st.caption(f"ℹ️ {len(extra)} vorhandene Belege stehen in keiner Abrechnung: "
                    f"{', '.join(extra[:30])}{' …' if len(extra) > 30 else ''}")
+
+    # Hinterlegte Abrechnungs-PDFs anzeigen/herunterladen
+    abr_pdfs = st.session_state.get(abrpdf_key) or {}
+    if abr_pdfs:
+        with st.expander(f"📑 {len(abr_pdfs)} Abrechnungs-PDF(s)"):
+            for _name, _raw in abr_pdfs.items():
+                st.download_button(
+                    f"📥 {_name}",
+                    data=_raw,
+                    file_name=_name,
+                    mime="application/pdf",
+                    key=f"dl_abrpdf_{jahr_auswahl}_{monat_auswahl:02d}_{_name}",
+                )
