@@ -1069,7 +1069,7 @@ with tab3:
                 "Hersteller":   st.column_config.TextColumn("Hersteller",   disabled=True),
                 "Pzn":          st.column_config.TextColumn("PZN",          disabled=True, width="small"),
                 "Artikelname":  st.column_config.TextColumn("Artikelname",  disabled=True, width="large"),
-                "Bestellmenge": st.column_config.NumberColumn("Bestellmenge", disabled=True),
+                "Bestellmenge": st.column_config.NumberColumn("Bestellmenge", min_value=0, step=1),
                 "Lagerbestand": st.column_config.NumberColumn("Lagerbestand", disabled=True),
                 "Verkaeufe L30":st.column_config.NumberColumn("L30",          disabled=True),
                 "Verkaeufe L90":st.column_config.NumberColumn("L90",          disabled=True),
