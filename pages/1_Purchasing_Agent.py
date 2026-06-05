@@ -302,6 +302,11 @@ st.markdown("""
     [data-testid="stFileUploaderDropzone"] button[kind="secondary"] { display: none !important; }
     [data-testid="stFileUploaderDropzoneInstructions"] > div > span { display: none !important; }
 
+    /* number_input: +/- Buttons ausblenden */
+    button[data-testid="stNumberInputStepDown"],
+    button[data-testid="stNumberInputStepUp"] { display: none !important; }
+    [data-testid="stNumberInput"] input { border-radius: 8px !important; }
+
     /* Divider */
     hr { border-color: #E5E7EB; }
 
@@ -600,9 +605,57 @@ with tab1:
             min_value=0, max_value=50000,
             value=int(st.session_state.get("algo_mbw_standard", 2000)),
             step=100,
-            help="Mindestbestellwert pro Hersteller. Ausnahmen: Drive → Stammdaten → mbw_exceptions.csv",
+            help="Gilt für alle Hersteller ohne eigenen Eintrag unten",
         )
         st.session_state["algo_mbw_standard"] = float(mbw_std)
+
+        # MBW-Ausnahmen Tabelle
+        st.caption("**Hersteller-Ausnahmen (mbw_exceptions.csv)**")
+        _drive_mbw = st.session_state.get("drive")
+        _mbw_df_current = None
+        if _drive_mbw:
+            try:
+                _sid = get_stammdaten_folder_id(_drive_mbw)
+                _mbw_df_current = download_csv_from_drive(_drive_mbw, "mbw_exceptions.csv", _sid)
+            except Exception:
+                pass
+
+        if _mbw_df_current is None:
+            _mbw_df_current = pd.DataFrame({"Hersteller": [], "MBW": []})
+
+        _mbw_edited = st.data_editor(
+            _mbw_df_current,
+            column_config={
+                "Hersteller": st.column_config.TextColumn("Hersteller", width="large"),
+                "MBW":        st.column_config.NumberColumn("MBW (€)", format="%.0f", width="small"),
+            },
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key="mbw_exceptions_editor",
+        )
+        if st.button("💾 MBW-Ausnahmen speichern", use_container_width=True):
+            if _drive_mbw:
+                try:
+                    import io as _io
+                    from googleapiclient.http import MediaIoBaseUpload as _MIU
+                    _sid = get_stammdaten_folder_id(_drive_mbw)
+                    _csv_bytes = _mbw_edited.to_csv(index=False).encode()
+                    _media = _MIU(_io.BytesIO(_csv_bytes), mimetype="text/csv")
+                    _q = f"name='mbw_exceptions.csv' and '{_sid}' in parents and trashed=false"
+                    _ex = _drive_mbw.files().list(q=_q, fields="files(id)", pageSize=1).execute().get("files", [])
+                    if _ex:
+                        _drive_mbw.files().update(fileId=_ex[0]["id"], media_body=_media).execute()
+                    else:
+                        _drive_mbw.files().create(
+                            body={"name": "mbw_exceptions.csv", "parents": [_sid]},
+                            media_body=_media, fields="id",
+                        ).execute()
+                    st.success("✓ Gespeichert")
+                except Exception as _e:
+                    st.error(f"Fehler: {_e}")
+            else:
+                st.warning("Drive nicht verbunden")
 
         st.divider()
         st.markdown("**Kritische Positionsgröße**")

@@ -302,24 +302,26 @@ def berechne_bestellvorschlag(excel_bytes: bytes, letzte_bestellung_df, mbw_ausn
     df['Bedarf_roh']   = df['Ziel_Menge'] - df['Effektiver_Bestand']
     df['Bestellmenge'] = df.apply(lambda r: aufrunden_ve(r['Bedarf_roh'], int(r['Ve1'])), axis=1)
 
-    # Kritische Positionsgröße: zu große Einzelpositionen um eine Ve reduzieren
+    # Kritische Positionsgröße: Bestellwert auf Minimum für Mindestreichweite kürzen
     krit_eur  = CONFIG.get('kritische_positionsgroesse', 0.0)
-    mind_tage = CONFIG.get('mindestreichweite', 0)
+    mind_tage = CONFIG.get('mindestreichweite', 30)
     if krit_eur > 0:
         def _reduziere(row):
             bm  = row['Bestellmenge']
             ek  = row.get('Rechnungs Netto Ek Ve1', 0) or 0
             ve1 = max(1, int(row['Ve1']))
             tv  = row['TV']
-            if bm * ek > krit_eur and bm > ve1:
-                neue_menge = bm - ve1
-                if tv > 0:
-                    reichweite = (row['Effektiver_Bestand'] + neue_menge) / tv
-                    if reichweite >= mind_tage:
-                        return neue_menge
-            return bm
+            if bm * ek <= krit_eur:
+                return bm   # unter Grenze — nichts tun
+            if tv <= 0:
+                return bm   # kein Verbrauch — nichts tun
+            # Mindestmenge für Mindestreichweite berechnen (aufgerundet auf Ve1)
+            min_roh  = max(0, mind_tage * tv - row['Effektiver_Bestand'])
+            min_menge = aufrunden_ve(min_roh, ve1)
+            # Mindestmenge verwenden (kann immer noch über Grenze liegen — ist dann unvermeidbar)
+            return min_menge
         df['Bestellmenge'] = df.apply(_reduziere, axis=1)
-        log.append(f"⚙ Kritische Positionsgröße: >{krit_eur:.0f} € → auf Ve darunter reduziert (min. {mind_tage} Tage Reichweite)")
+        log.append(f"⚙ Kritische Positionsgröße aktiv: >{krit_eur:.0f} € → Minimum für {mind_tage} Tage Reichweite")
 
     kandidaten = df[df['Bestellmenge'] > 0].copy()
     kandidaten['Bestellwert'] = kandidaten['Bestellmenge'] * kandidaten['Rechnungs Netto Ek Ve1']
