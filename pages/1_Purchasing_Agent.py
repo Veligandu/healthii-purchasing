@@ -783,11 +783,11 @@ with tab1:
         st.info("Keine Bestellungen über MBW.")
     else:
         st.subheader("Bestellmengen anpassen")
-        st.caption("Nur die Spalte **Bestellmenge** ist editierbar. Bestellwert aktualisiert sich automatisch.")
+        st.caption("**Bestellmenge** editierbar · Zeilen über das Papierkorb-Icon löschen · Änderungen mit **Speichern** übernehmen.")
 
         # Anzeigespalten
         basis_spalten = [
-            "Hersteller", "Pzn", "Artikelname", "Bestellmenge",
+            "Hersteller", "Pzn", "Artikelname", "Ve1", "Bestellmenge",
             "Rechnungs Netto Ek Ve1", "Bestellwert", "Aep",
             "Lagerbestand", "Verkaeufe L30", "Verkaeufe L90",
         ]
@@ -800,6 +800,7 @@ with tab1:
             "Hersteller":              st.column_config.TextColumn("Hersteller",        disabled=True),
             "Pzn":                     st.column_config.TextColumn("PZN",               disabled=True),
             "Artikelname":             st.column_config.TextColumn("Artikelname",        disabled=True, width="large"),
+            "Ve1":                     st.column_config.NumberColumn("Ve1",              format="%d", disabled=True),
             "Bestellmenge":            st.column_config.NumberColumn("Bestellmenge",     min_value=0, step=1),
             "Rechnungs Netto Ek Ve1":  st.column_config.NumberColumn("EK Ve1 (€)",       format="%.2f", disabled=True),
             "Bestellwert":             st.column_config.NumberColumn("Bestellwert (€)",  format="%.2f", disabled=True),
@@ -816,13 +817,16 @@ with tab1:
             column_config=col_config,
             use_container_width=True,
             hide_index=True,
+            num_rows="dynamic",
             key="editor_tab1",
         )
 
-        # Bestellwert nach Mengenänderung neu berechnen
+        # Bestellwert live neu berechnen
         edited["Bestellwert"] = edited["Bestellmenge"] * edited["Rechnungs Netto Ek Ve1"]
-        st.session_state.df_bestellen_edit.loc[edited.index, "Bestellmenge"] = edited["Bestellmenge"]
-        st.session_state.df_bestellen_edit.loc[edited.index, "Bestellwert"]  = edited["Bestellwert"]
+
+        if st.button("💾 Änderungen übernehmen", type="primary"):
+            st.session_state.df_bestellen_edit = edited.copy()
+            st.success("✓ Änderungen übernommen")
 
         st.divider()
 
