@@ -162,8 +162,9 @@ def get_gh_folder_id(_drive):
     return folder["id"]
 
 
-def lade_monatstabelle_aus_drive(_drive, jahr, monat):
-    """Lädt gespeicherte Monatstabelle aus Drive, gibt DataFrame oder None zurück."""
+def lade_monat_aus_drive(_drive, jahr, monat):
+    """Lädt gespeicherten Monat aus Drive.
+    Gibt (df_roh, totals) zurück — df_roh=None falls keine Rohdaten vorhanden."""
     try:
         from googleapiclient.http import MediaIoBaseDownload
         folder_id = get_gh_folder_id(_drive)
@@ -172,25 +173,42 @@ def lade_monatstabelle_aus_drive(_drive, jahr, monat):
         res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
         files = res.get("files", [])
         if not files:
-            return None
+            return None, {}
         buf = io.BytesIO()
         dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=files[0]["id"]))
         done = False
         while not done:
             _, done = dl.next_chunk()
         buf.seek(0)
-        return pd.read_excel(buf, dtype={"PZN": str})
+        xls = pd.ExcelFile(buf)
+        df_roh = (
+            pd.read_excel(xls, "Rohdaten", dtype={"PZN": str, "Beleg": str})
+            if "Rohdaten" in xls.sheet_names else None
+        )
+        totals = {}
+        if "Summen" in xls.sheet_names:
+            df_t = pd.read_excel(xls, "Summen", dtype={"Beleg": str})
+            totals = dict(zip(df_t["Beleg"], df_t["Warenwert_Beleg"]))
+        return df_roh, totals
     except Exception:
-        return None
+        return None, {}
 
 
-def speichere_monatstabelle_in_drive(_drive, df, jahr, monat):
-    """Speichert Monatstabelle als Excel in Drive (überschreibt bestehende)."""
+def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, jahr, monat):
+    """Speichert Monatstabelle + Rohdaten + PDF-Summen als Excel in Drive."""
     from googleapiclient.http import MediaIoBaseUpload
     folder_id = get_gh_folder_id(_drive)
     name = f"gh_rechnung_{jahr}_{monat:02d}.xlsx"
+    df_totals = pd.DataFrame(
+        [{"Beleg": b, "Warenwert_Beleg": t} for b, t in (totals or {}).items()]
+    )
     buf = io.BytesIO()
-    df.to_excel(buf, index=False)
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        df_agg.to_excel(w, index=False, sheet_name=f"Monat {monat:02d}-{jahr}")
+        if df_roh is not None:
+            df_roh.to_excel(w, index=False, sheet_name="Rohdaten")
+        if not df_totals.empty:
+            df_totals.to_excel(w, index=False, sheet_name="Summen")
     buf.seek(0)
     media = MediaIoBaseUpload(
         buf,
@@ -206,6 +224,72 @@ def speichere_monatstabelle_in_drive(_drive, df, jahr, monat):
             media_body=media,
             fields="id",
         ).execute()
+
+
+def get_pdf_folder_id(_drive, jahr, monat, anlegen=True):
+    """ID des Monats-PDF-Unterordners in 'GH-Rechnungen'. None falls fehlend und anlegen=False."""
+    parent = get_gh_folder_id(_drive)
+    fname = f"pdfs_{jahr}_{monat:02d}"
+    q = (f"name='{fname}' and '{parent}' in parents "
+         f"and mimeType='application/vnd.google-apps.folder' and trashed=false")
+    res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
+    files = res.get("files", [])
+    if files:
+        return files[0]["id"]
+    if not anlegen:
+        return None
+    folder = _drive.files().create(
+        body={"name": fname, "parents": [parent],
+              "mimeType": "application/vnd.google-apps.folder"},
+        fields="id",
+    ).execute()
+    return folder["id"]
+
+
+def speichere_pdfs_in_drive(_drive, pdfs, jahr, monat):
+    """Lädt alle Original-PDFs in den Monats-Unterordner (überschreibt bestehende)."""
+    from googleapiclient.http import MediaIoBaseUpload
+    if not pdfs:
+        return
+    folder_id = get_pdf_folder_id(_drive, jahr, monat, anlegen=True)
+    for beleg, raw in pdfs.items():
+        name = f"INVOICE-{beleg}.pdf"
+        media = MediaIoBaseUpload(io.BytesIO(raw), mimetype="application/pdf")
+        q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
+        existing = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
+        if existing:
+            _drive.files().update(fileId=existing[0]["id"], media_body=media).execute()
+        else:
+            _drive.files().create(
+                body={"name": name, "parents": [folder_id]},
+                media_body=media, fields="id",
+            ).execute()
+
+
+def lade_pdfs_aus_drive(_drive, jahr, monat):
+    """Lädt alle Original-PDFs des Monats. Gibt dict beleg → bytes zurück."""
+    from googleapiclient.http import MediaIoBaseDownload
+    out = {}
+    try:
+        folder_id = get_pdf_folder_id(_drive, jahr, monat, anlegen=False)
+        if not folder_id:
+            return out
+        res = _drive.files().list(
+            q=f"'{folder_id}' in parents and trashed=false and mimeType='application/pdf'",
+            fields="files(id,name)", pageSize=200,
+        ).execute()
+        for f in res.get("files", []):
+            m = re.search(r"INVOICE-(.+)\.pdf$", f["name"], re.IGNORECASE)
+            beleg = m.group(1) if m else f["name"]
+            buf = io.BytesIO()
+            dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=f["id"]))
+            done = False
+            while not done:
+                _, done = dl.next_chunk()
+            out[beleg] = buf.getvalue()
+    except Exception:
+        pass
+    return out
 
 # ─── PDF-Parser ───────────────────────────────────────────────────────────────
 
@@ -342,29 +426,44 @@ monat_label = f"{monat_auswahl:02d}/{jahr_auswahl}"
 roh_key    = f"gh_roh_{jahr_auswahl}_{monat_auswahl:02d}"    # Rohzeilen pro Beleg
 totals_key = f"gh_totals_{jahr_auswahl}_{monat_auswahl:02d}" # PDF-Summen pro Beleg
 agg_key    = f"gh_agg_{jahr_auswahl}_{monat_auswahl:02d}"    # aggregierte Monatstabelle
+pdf_key    = f"gh_pdfs_{jahr_auswahl}_{monat_auswahl:02d}"   # Original-PDF-Bytes pro Beleg
 
-for k in [roh_key, totals_key, agg_key]:
+for k in [roh_key, totals_key, agg_key, pdf_key]:
     if k not in st.session_state:
         st.session_state[k] = None
+
+# ─── Gespeicherten Monat automatisch aus Drive laden (einmalig je Monat) ──────
+
+load_flag = f"gh_loaded_{jahr_auswahl}_{monat_auswahl:02d}"
+if drive and st.session_state[roh_key] is None and not st.session_state.get(load_flag):
+    df_roh_drive, totals_drive = lade_monat_aus_drive(drive, int(jahr_auswahl), monat_auswahl)
+    if df_roh_drive is not None and not df_roh_drive.empty:
+        st.session_state[roh_key]    = df_roh_drive
+        st.session_state[totals_key] = totals_drive
+        st.session_state[pdf_key]    = lade_pdfs_aus_drive(drive, int(jahr_auswahl), monat_auswahl)
+    st.session_state[load_flag] = True
 
 # ─── PDFs einlesen ────────────────────────────────────────────────────────────
 
 if verarbeiten and uploads:
     alle_zeilen = []
     totals_neu  = {}   # beleg → total_pdf
+    pdfs_neu    = {}   # beleg → original PDF-Bytes
     fehler = []
     fortschritt = st.progress(0, text="Lese PDFs …")
 
     for i, pdf_file in enumerate(uploads):
         fortschritt.progress((i + 1) / len(uploads), text=pdf_file.name)
         try:
-            df_pdf, total_pdf = parse_pdf(pdf_file.read(), pdf_file.name)
+            raw = pdf_file.read()
+            df_pdf, total_pdf = parse_pdf(raw, pdf_file.name)
             if df_pdf.empty:
                 fehler.append(f"⚠️ {pdf_file.name}: Keine Positionen gefunden")
             else:
                 alle_zeilen.append(df_pdf)
                 beleg = df_pdf["Beleg"].iloc[0]
                 totals_neu[beleg] = total_pdf
+                pdfs_neu[beleg] = raw
         except Exception as e:
             fehler.append(f"❌ {pdf_file.name}: {e}")
 
@@ -385,8 +484,12 @@ if verarbeiten and uploads:
         totals_alt = st.session_state[totals_key] or {}
         totals_alt.update(totals_neu)
 
+        pdfs_alt = st.session_state[pdf_key] or {}
+        pdfs_alt.update(pdfs_neu)
+
         st.session_state[roh_key]    = df_gesamt
         st.session_state[totals_key] = totals_alt
+        st.session_state[pdf_key]    = pdfs_alt
 
         for f in fehler:
             st.warning(f)
@@ -427,9 +530,13 @@ if df_roh is not None and not df_roh.empty:
 
     st.divider()
 
-    # Übersichtstabelle
-    st.dataframe(
-        df_belege[["Status", "Beleg", "Positionen", "Warenwert_berechnet", "Warenwert_Beleg", "Differenz"]],
+    # Übersichtstabelle — Zeile anklicken, um den Beleg zu prüfen/korrigieren
+    st.caption("Zeile anklicken, um den Beleg gegen das PDF zu prüfen und zu korrigieren.")
+    df_anzeige = df_belege[
+        ["Status", "Beleg", "Positionen", "Warenwert_berechnet", "Warenwert_Beleg", "Differenz"]
+    ].reset_index(drop=True)
+    tabelle_event = st.dataframe(
+        df_anzeige,
         column_config={
             "Status":               st.column_config.TextColumn(""),
             "Beleg":                st.column_config.TextColumn("Belegnr."),
@@ -440,42 +547,89 @@ if df_roh is not None and not df_roh.empty:
         },
         use_container_width=True,
         hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key=f"belegtabelle_{jahr_auswahl}_{monat_auswahl:02d}",
     )
 
-    # Editierbare Einzelzeilen bei Abweichungen
-    belege_abweichend = df_belege[df_belege["Status"] != "✅"]["Beleg"].tolist()
-    if belege_abweichend:
-        st.divider()
-        st.subheader("Positionen korrigieren")
-        for beleg in belege_abweichend:
-            diff = df_belege.loc[df_belege["Beleg"] == beleg, "Differenz"].iloc[0]
-            with st.expander(f"⚠️ Beleg {beleg}  —  Differenz: {diff:+.2f} €"):
-                df_b = df_roh[df_roh["Beleg"] == beleg].copy()
-                edit_cols = ["PZN", "Menge", "EK_ohne_MWSt", "Warenwert"]
-                edited = st.data_editor(
-                    df_b[edit_cols].reset_index(drop=True),
-                    column_config={
-                        "PZN":          st.column_config.TextColumn("PZN"),
-                        "Menge":        st.column_config.NumberColumn("Menge",        min_value=0, step=1),
-                        "EK_ohne_MWSt": st.column_config.NumberColumn("EK o. MWSt (€)", format="%.2f"),
-                        "Warenwert":    st.column_config.NumberColumn("Warenwert (€)", format="%.2f", disabled=True),
-                    },
-                    num_rows="dynamic",
-                    use_container_width=True,
-                    hide_index=True,
-                    key=f"editor_beleg_{beleg}",
-                )
-                # Warenwert live neu berechnen
-                edited["Warenwert"] = (edited["Menge"] * edited["EK_ohne_MWSt"]).round(2)
+    auswahl_zeilen = tabelle_event.selection.rows if tabelle_event.selection else []
+    aktiver_beleg  = df_anzeige.iloc[auswahl_zeilen[0]]["Beleg"] if auswahl_zeilen else None
 
-                if st.button("💾 Korrekturen übernehmen", key=f"save_{beleg}", type="primary"):
-                    edited["Beleg"] = beleg
-                    edited["Jahr"]  = df_b["Jahr"].iloc[0]
-                    edited["Monat"] = df_b["Monat"].iloc[0]
-                    df_rest = df_roh[df_roh["Beleg"] != beleg]
-                    st.session_state[roh_key] = pd.concat([df_rest, edited], ignore_index=True)
-                    st.success(f"✓ Beleg {beleg} aktualisiert")
-                    st.rerun()
+    # ─── Position korrigieren: ausgewählter Beleg + zugehöriges PDF ────────────
+    if aktiver_beleg is not None:
+        beleg = aktiver_beleg
+        zeile = df_belege[df_belege["Beleg"] == beleg].iloc[0]
+        diff      = zeile["Differenz"]
+        beleg_wert = zeile["Warenwert_Beleg"]
+        ist_ok    = zeile["Status"] == "✅"
+
+        st.divider()
+        st.subheader(f"{'✅' if ist_ok else '⚠️'} Beleg {beleg} korrigieren")
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Berechnet", f"{zeile['Warenwert_berechnet']:,.2f} €")
+        m2.metric("Laut Beleg", f"{beleg_wert:,.2f} €" if pd.notna(beleg_wert) else "—")
+        m3.metric("Differenz",  f"{diff:+.2f} €" if pd.notna(diff) else "—")
+
+        df_b = df_roh[df_roh["Beleg"] == beleg].copy()
+        edit_cols = ["PZN", "Menge", "EK_ohne_MWSt", "Warenwert"]
+        edited = st.data_editor(
+            df_b[edit_cols].reset_index(drop=True),
+            column_config={
+                "PZN":          st.column_config.TextColumn("PZN"),
+                "Menge":        st.column_config.NumberColumn("Menge",        min_value=0, step=1),
+                "EK_ohne_MWSt": st.column_config.NumberColumn("EK o. MWSt (€)", format="%.2f"),
+                "Warenwert":    st.column_config.NumberColumn("Warenwert (€)", format="%.2f", disabled=True),
+            },
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key=f"editor_beleg_{beleg}",
+        )
+        # Warenwert live neu berechnen
+        edited["Warenwert"] = (edited["Menge"] * edited["EK_ohne_MWSt"]).round(2)
+
+        # Live-Hinweis, ob die Korrektur die Abweichung schließt
+        neuer_wert = edited["Warenwert"].sum()
+        if pd.notna(beleg_wert):
+            neue_diff = round(neuer_wert - beleg_wert, 2)
+            if abs(neue_diff) < 0.01:
+                st.success(f"Nach Korrektur stimmt der Warenwert überein ({neuer_wert:,.2f} €).")
+            else:
+                st.warning(f"Nach Korrektur weiterhin {neue_diff:+.2f} € Differenz "
+                           f"({neuer_wert:,.2f} € berechnet vs. {beleg_wert:,.2f} € laut Beleg).")
+
+        if st.button("💾 Korrekturen übernehmen", key=f"save_{beleg}", type="primary"):
+            edited["Beleg"] = beleg
+            edited["Jahr"]  = df_b["Jahr"].iloc[0]
+            edited["Monat"] = df_b["Monat"].iloc[0]
+            df_rest = df_roh[df_roh["Beleg"] != beleg]
+            st.session_state[roh_key] = pd.concat([df_rest, edited], ignore_index=True)
+            st.success(f"✓ Beleg {beleg} aktualisiert")
+            st.rerun()
+
+        # Zugehöriges Original-PDF anzeigen
+        st.markdown("##### Zugehörige Rechnung (PDF)")
+        pdfs = st.session_state.get(pdf_key) or {}
+        pdf_bytes = pdfs.get(beleg)
+        if pdf_bytes:
+            b64 = base64.b64encode(pdf_bytes).decode()
+            st.markdown(
+                f'<iframe src="data:application/pdf;base64,{b64}" '
+                f'width="100%" height="820px" '
+                f'style="border:1px solid #E5E7EB;border-radius:10px;"></iframe>',
+                unsafe_allow_html=True,
+            )
+            st.download_button(
+                "📥 PDF herunterladen",
+                data=pdf_bytes,
+                file_name=f"INVOICE-{beleg}.pdf",
+                mime="application/pdf",
+                key=f"dl_pdf_{beleg}",
+            )
+        else:
+            st.info("Das Original-PDF ist nur in der Sitzung verfügbar, in der es hochgeladen "
+                    "wurde. Lade die Rechnung erneut hoch, um sie hier anzuzeigen.")
 
     # ─── Monatstabelle aggregieren & speichern ────────────────────────────────
 
@@ -507,8 +661,12 @@ if df_roh is not None and not df_roh.empty:
     with col_save:
         if drive and st.button("💾 In Drive speichern", use_container_width=True, type="primary"):
             try:
-                speichere_monatstabelle_in_drive(drive, df_agg, int(jahr_auswahl), monat_auswahl)
-                st.success("✓ In Drive gespeichert")
+                speichere_monat_in_drive(
+                    drive, df_agg, df_roh, totals, int(jahr_auswahl), monat_auswahl
+                )
+                pdfs_session = st.session_state.get(pdf_key) or {}
+                speichere_pdfs_in_drive(drive, pdfs_session, int(jahr_auswahl), monat_auswahl)
+                st.success(f"✓ Monatstabelle, Rohdaten und {len(pdfs_session)} PDF(s) in Drive gespeichert")
             except Exception as e:
                 st.error(f"Drive-Fehler: {e}")
 
