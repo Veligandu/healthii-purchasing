@@ -199,6 +199,18 @@ def lade_monat_aus_drive(_drive, jahr, monat):
         return None, {}
 
 
+def monat_existiert_in_drive(_drive, jahr, monat):
+    """True, wenn für den Monat bereits eine gespeicherte Datei in Drive liegt."""
+    try:
+        folder_id = get_gh_folder_id(_drive)
+        name = f"gh_rechnung_{jahr}_{monat:02d}.xlsx"
+        q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
+        res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
+        return bool(res.get("files", []))
+    except Exception:
+        return False
+
+
 def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, jahr, monat):
     """Speichert Monatstabelle + Rohdaten + PDF-Summen als Excel in Drive."""
     from googleapiclient.http import MediaIoBaseUpload
@@ -382,12 +394,23 @@ with st.sidebar:
     st.header("📄 Rechnungen hochladen")
 
     heute = date.today()
+
+    # Klick auf gespeicherten Monat: Auswahl vor Erzeugung der Widgets übernehmen
+    if "gh_pending" in st.session_state:
+        _pj, _pm = st.session_state.pop("gh_pending")
+        st.session_state["gh_jahr"]  = _pj
+        st.session_state["gh_monat"] = _pm
+    if "gh_monat" not in st.session_state:
+        st.session_state["gh_monat"] = heute.month
+    if "gh_jahr" not in st.session_state:
+        st.session_state["gh_jahr"] = heute.year
+
     col_m, col_j = st.columns(2)
     monat_auswahl = col_m.selectbox("Monat", list(range(1, 13)),
-                                     index=heute.month - 1,
+                                     key="gh_monat",
                                      format_func=lambda m: f"{m:02d}")
     jahr_auswahl  = col_j.number_input("Jahr", min_value=2020, max_value=2099,
-                                        value=heute.year, step=1)
+                                        step=1, key="gh_jahr")
 
     uploads = st.file_uploader(
         "PDF-Rechnungen",
@@ -417,11 +440,20 @@ with st.sidebar:
             ).execute()
             _archiv = _res.get("files", [])
             if _archiv:
+                st.caption("Zum Öffnen anklicken:")
                 for _f in _archiv:
                     _m = re.search(r"gh_rechnung_(\d{4})_(\d{2})", _f["name"])
                     if _m:
-                        _label = f"{_m.group(2)}/{_m.group(1)}"
-                        st.caption(f"✓ {_label}")
+                        _yy, _mm = int(_m.group(1)), int(_m.group(2))
+                        _aktiv = (_yy == int(jahr_auswahl) and _mm == monat_auswahl)
+                        if st.button(f"{'📂' if _aktiv else '✓'} {_mm:02d}/{_yy}",
+                                     key=f"open_{_yy}_{_mm}",
+                                     use_container_width=True,
+                                     type="primary" if _aktiv else "secondary"):
+                            st.session_state["gh_pending"] = (_yy, _mm)
+                            st.rerun()
+            else:
+                st.caption("Noch keine gespeicherten Monate.")
         except Exception:
             pass
 
@@ -674,17 +706,42 @@ if df_roh is not None and not df_roh.empty:
 
     col_save, col_dl = st.columns(2)
 
+    def _speichern_ausfuehren():
+        speichere_monat_in_drive(
+            drive, df_agg, df_roh, totals, int(jahr_auswahl), monat_auswahl
+        )
+        pdfs_session = st.session_state.get(pdf_key) or {}
+        speichere_pdfs_in_drive(drive, pdfs_session, int(jahr_auswahl), monat_auswahl)
+        return len(pdfs_session)
+
+    confirm_key = f"gh_confirm_overwrite_{jahr_auswahl}_{monat_auswahl:02d}"
+
     with col_save:
         if drive and st.button("💾 In Drive speichern", use_container_width=True, type="primary"):
+            if monat_existiert_in_drive(drive, int(jahr_auswahl), monat_auswahl):
+                st.session_state[confirm_key] = True   # nachfragen
+            else:
+                try:
+                    n = _speichern_ausfuehren()
+                    st.success(f"✓ Monatstabelle, Rohdaten und {n} PDF(s) in Drive gespeichert")
+                except Exception as e:
+                    st.error(f"Drive-Fehler: {e}")
+
+    # Überschreiben-Abfrage
+    if st.session_state.get(confirm_key):
+        st.warning(f"Für **{monat_label}** existiert bereits eine Speicherung in Drive. "
+                   f"Überschreiben?")
+        col_ja, col_nein = st.columns(2)
+        if col_ja.button("Ja, überschreiben", type="primary", key=f"ow_yes_{confirm_key}"):
             try:
-                speichere_monat_in_drive(
-                    drive, df_agg, df_roh, totals, int(jahr_auswahl), monat_auswahl
-                )
-                pdfs_session = st.session_state.get(pdf_key) or {}
-                speichere_pdfs_in_drive(drive, pdfs_session, int(jahr_auswahl), monat_auswahl)
-                st.success(f"✓ Monatstabelle, Rohdaten und {len(pdfs_session)} PDF(s) in Drive gespeichert")
+                n = _speichern_ausfuehren()
+                st.success(f"✓ Überschrieben — Monatstabelle, Rohdaten und {n} PDF(s) gespeichert")
             except Exception as e:
                 st.error(f"Drive-Fehler: {e}")
+            st.session_state[confirm_key] = False
+        if col_nein.button("Abbrechen", key=f"ow_no_{confirm_key}"):
+            st.session_state[confirm_key] = False
+            st.rerun()
 
     with col_dl:
         _buf = io.BytesIO()
