@@ -716,30 +716,32 @@ if df_roh is not None and not df_roh.empty:
 
     confirm_key = f"gh_confirm_overwrite_{jahr_auswahl}_{monat_auswahl:02d}"
 
+    def _speichern_mit_feedback(prefix="✓"):
+        try:
+            with st.spinner("Speichere in Drive … (PDFs werden hochgeladen)"):
+                n = _speichern_ausfuehren()
+            st.success(f"{prefix} Monatstabelle, Rohdaten und {n} PDF(s) in Drive gespeichert")
+        except Exception as e:
+            st.error(f"Drive-Fehler: {e}")
+
     with col_save:
         if drive and st.button("💾 In Drive speichern", use_container_width=True, type="primary"):
             if monat_existiert_in_drive(drive, int(jahr_auswahl), monat_auswahl):
                 st.session_state[confirm_key] = True   # nachfragen
+                st.rerun()
             else:
-                try:
-                    n = _speichern_ausfuehren()
-                    st.success(f"✓ Monatstabelle, Rohdaten und {n} PDF(s) in Drive gespeichert")
-                except Exception as e:
-                    st.error(f"Drive-Fehler: {e}")
+                _speichern_mit_feedback()
 
     # Überschreiben-Abfrage
     if st.session_state.get(confirm_key):
         st.warning(f"Für **{monat_label}** existiert bereits eine Speicherung in Drive. "
                    f"Überschreiben?")
         col_ja, col_nein = st.columns(2)
-        if col_ja.button("Ja, überschreiben", type="primary", key=f"ow_yes_{confirm_key}"):
-            try:
-                n = _speichern_ausfuehren()
-                st.success(f"✓ Überschrieben — Monatstabelle, Rohdaten und {n} PDF(s) gespeichert")
-            except Exception as e:
-                st.error(f"Drive-Fehler: {e}")
+        if col_ja.button("Ja, überschreiben", type="primary",
+                         use_container_width=True, key=f"ow_yes_{confirm_key}"):
             st.session_state[confirm_key] = False
-        if col_nein.button("Abbrechen", key=f"ow_no_{confirm_key}"):
+            _speichern_mit_feedback(prefix="✓ Überschrieben —")
+        if col_nein.button("Abbrechen", use_container_width=True, key=f"ow_no_{confirm_key}"):
             st.session_state[confirm_key] = False
             st.rerun()
 
