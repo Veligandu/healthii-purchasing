@@ -741,6 +741,23 @@ if belege_alle:
         key=f"belegtabelle_{jahr_auswahl}_{monat_auswahl:02d}",
     )
 
+    # Belegkontrolle als Excel herunterladen
+    _bk_buf = io.BytesIO()
+    df_anzeige.rename(columns={
+        "Warenwert_berechnet": "Berechnet (€)",
+        "Warenwert_Beleg":     "Laut Beleg (€)",
+        "Differenz":           "Differenz (€)",
+        "Positionen":          "Pos.",
+        "Beleg":               "Belegnr.",
+    }).to_excel(_bk_buf, index=False, sheet_name="Belegkontrolle")
+    st.download_button(
+        "📥 Belegkontrolle als Excel",
+        data=_bk_buf.getvalue(),
+        file_name=f"belegkontrolle_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=f"dl_belegkontrolle_{jahr_auswahl}_{monat_auswahl:02d}",
+    )
+
     auswahl_zeilen = tabelle_event.selection.rows if tabelle_event.selection else []
     aktiver_beleg  = df_anzeige.iloc[auswahl_zeilen[0]]["Beleg"] if auswahl_zeilen else None
 
