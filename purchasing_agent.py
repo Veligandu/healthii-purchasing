@@ -323,30 +323,58 @@ def berechne_bestellvorschlag(excel_bytes: bytes, letzte_bestellung_df, mbw_ausn
         df['Bestellmenge'] = df.apply(_reduziere, axis=1)
         log.append(f"⚙ Kritische Positionsgröße aktiv: >{krit_eur:.0f} € → Minimum für {mind_tage} Tage Reichweite")
 
+    # Bestellwert für alle Artikel (auch kein Bedarf) vorberechnen
+    df['Bestellwert'] = df['Bestellmenge'] * df['Rechnungs Netto Ek Ve1']
+
     kandidaten = df[df['Bestellmenge'] > 0].copy()
-    kandidaten['Bestellwert'] = kandidaten['Bestellmenge'] * kandidaten['Rechnungs Netto Ek Ve1']
 
     bestellen_liste  = []
     unter_mbw_liste  = []
+    hersteller_log   = {}   # strukturiert: {hersteller: {status, mbw, bestellwert, df_positionen}}
 
-    for hersteller, grp in kandidaten.groupby('Hersteller'):
-        mbw        = mbw_ausnahmen.get(hersteller, CONFIG['mbw_standard'])
-        gesamtwert = grp['Bestellwert'].sum()
-        grp = grp.copy()
-        grp['MBW']       = mbw
-        grp['Fehlbetrag'] = max(0, mbw - gesamtwert)
-        if gesamtwert >= mbw:
-            bestellen_liste.append(grp)
-            log.append(f"✓ BESTELLEN: {hersteller} — {len(grp)} Pos., {gesamtwert:.2f} EUR")
+    # Alle Hersteller aus Gesamtliste (inkl. kein Bedarf)
+    for hersteller, grp_all in df.groupby('Hersteller'):
+        mbw = mbw_ausnahmen.get(hersteller, CONFIG['mbw_standard'])
+        grp_all = grp_all.copy()
+        grp_all['MBW'] = mbw
+
+        grp_kand = grp_all[grp_all['Bestellmenge'] > 0].copy()
+        gesamtwert = grp_kand['Bestellwert'].sum() if not grp_kand.empty else 0.0
+
+        if not grp_kand.empty:
+            grp_kand['Fehlbetrag'] = max(0, mbw - gesamtwert)
+            if gesamtwert >= mbw:
+                status = 'bestellen'
+                bestellen_liste.append(grp_kand)
+                log.append(f"✓ BESTELLEN: {hersteller} — {len(grp_kand)} Pos., {gesamtwert:.2f} EUR")
+            else:
+                status = 'unter_mbw'
+                unter_mbw_liste.append(grp_kand)
+                log.append(f"✗ UNTER MBW: {hersteller} — {gesamtwert:.2f} EUR (fehlt: {mbw - gesamtwert:.2f} EUR)")
         else:
-            unter_mbw_liste.append(grp)
-            log.append(f"✗ UNTER MBW: {hersteller} — {gesamtwert:.2f} EUR (fehlt: {mbw - gesamtwert:.2f} EUR)")
+            status = 'kein_bedarf'
+            log.append(f"— KEIN BEDARF: {hersteller} — Lagerbestand ausreichend")
+
+        hersteller_log[hersteller] = {
+            'status':      status,
+            'mbw':         mbw,
+            'bestellwert': gesamtwert,
+            'fehlbetrag':  max(0, mbw - gesamtwert),
+            'df':          grp_all[[
+                'Pzn', 'Artikelname', 'Lagerbestand',
+                'Bestellmenge_letzte_Woche', 'Effektiver_Bestand',
+                'Verkaeufe L30', 'Verkaeufe L90', 'TV',
+                'Ziel_Menge', 'Bedarf_roh', 'Ve1',
+                'Bestellmenge', 'Rechnungs Netto Ek Ve1', 'Bestellwert',
+            ]].reset_index(drop=True),
+        }
 
     return {
-        'bestellen':  pd.concat(bestellen_liste) if bestellen_liste else pd.DataFrame(),
-        'unter_mbw':  pd.concat(unter_mbw_liste) if unter_mbw_liste else pd.DataFrame(),
-        'log':        log,
-        'df_input':   df_input,
+        'bestellen':     pd.concat(bestellen_liste) if bestellen_liste else pd.DataFrame(),
+        'unter_mbw':     pd.concat(unter_mbw_liste) if unter_mbw_liste else pd.DataFrame(),
+        'log':           log,
+        'df_input':      df_input,
+        'hersteller_log': hersteller_log,
     }
 
 # ─── Excel Output ─────────────────────────────────────────────────────────────
