@@ -825,78 +825,76 @@ with tab1:
         # ── Berechnungslog strukturiert ───────────────────────────────────────
         _ts = st.session_state.get("ergebnis_timestamp", "")
         _hl = ergebnis.get("hersteller_log", {})
-        _label = f"🔍 Berechnungslog{f'  —  {_ts}' if _ts else ''}"
 
-        with st.expander(_label):
-            if not _hl:
-                # Fallback: einfacher Textlog
-                for eintrag in ergebnis["log"]:
-                    farbe = "green" if "✓" in eintrag else ("orange" if "⚙" in eintrag else "red")
-                    st.markdown(f"<span style='color:{farbe}'>{eintrag}</span>", unsafe_allow_html=True)
-            else:
-                # Globale Hinweise (erste Zeile + ⚙-Einträge)
-                for eintrag in ergebnis["log"]:
-                    if eintrag.startswith("Artikel") or "⚙" in eintrag:
-                        st.caption(eintrag)
+        st.markdown(f"**🔍 Berechnungslog** {'— ' + _ts if _ts else ''}")
 
-                # Sortierung: bestellen → unter_mbw → kein_bedarf
-                _reihenfolge = {"bestellen": 0, "unter_mbw": 1, "kein_bedarf": 2}
-                _sorted = sorted(_hl.items(), key=lambda x: _reihenfolge.get(x[1]["status"], 9))
+        if not _hl:
+            for eintrag in ergebnis["log"]:
+                farbe = "green" if "✓" in eintrag else ("orange" if "⚙" in eintrag else "red")
+                st.markdown(f"<span style='color:{farbe}'>{eintrag}</span>", unsafe_allow_html=True)
+        else:
+            # Globale Hinweise
+            for eintrag in ergebnis["log"]:
+                if eintrag.startswith("Artikel") or "⚙" in eintrag:
+                    st.caption(eintrag)
 
-                for _hersteller, _info in _sorted:
-                    _st   = _info["status"]
-                    _icon = "✅" if _st == "bestellen" else ("⚠️" if _st == "unter_mbw" else "—")
-                    _bw   = _info["bestellwert"]
-                    _mbw  = _info["mbw"]
-                    _fb   = _info["fehlbetrag"]
+            # Sortierung: bestellen → unter_mbw → kein_bedarf
+            _reihenfolge = {"bestellen": 0, "unter_mbw": 1, "kein_bedarf": 2}
+            _sorted = sorted(_hl.items(), key=lambda x: _reihenfolge.get(x[1]["status"], 9))
 
-                    if _st == "bestellen":
-                        _header = f"{_icon} **{_hersteller}** — {_bw:,.2f} € ≥ MBW {_mbw:,.0f} €"
-                    elif _st == "unter_mbw":
-                        _header = f"{_icon} **{_hersteller}** — {_bw:,.2f} € | fehlt {_fb:,.2f} € bis MBW {_mbw:,.0f} €"
-                    else:
-                        _header = f"{_icon} **{_hersteller}** — kein Bestellbedarf"
+            for _hersteller, _info in _sorted:
+                _st   = _info["status"]
+                _icon = "✅" if _st == "bestellen" else ("⚠️" if _st == "unter_mbw" else "—")
+                _bw   = _info["bestellwert"]
+                _mbw  = _info["mbw"]
+                _fb   = _info["fehlbetrag"]
 
-                    with st.expander(_header, expanded=False):
-                        _df_pos = _info["df"].copy()
-                        # Reichweite nach Bestellung berechnen
-                        _df_pos["Reichweite (Tage)"] = _df_pos.apply(
-                            lambda r: round((r["Effektiver_Bestand"] + r["Bestellmenge"]) / r["TV"], 1)
-                            if r["TV"] > 0 else None, axis=1
-                        )
-                        st.dataframe(
-                            _df_pos[[
-                                "Artikelname", "Pzn",
-                                "Lagerbestand", "Bestellmenge_letzte_Woche", "Effektiver_Bestand",
-                                "Verkaeufe L30", "Verkaeufe L90", "TV",
-                                "Ziel_Menge", "Bedarf_roh", "Ve1",
-                                "Bestellmenge", "Rechnungs Netto Ek Ve1", "Bestellwert",
-                                "Reichweite (Tage)",
-                            ]],
-                            column_config={
-                                "Artikelname":               st.column_config.TextColumn("Artikel", width="large"),
-                                "Pzn":                       st.column_config.TextColumn("PZN"),
-                                "Lagerbestand":              st.column_config.NumberColumn("Lager", format="%d"),
-                                "Bestellmenge_letzte_Woche": st.column_config.NumberColumn("Offen", format="%d",
-                                    help="Bereits bestellt, noch nicht eingelagert"),
-                                "Effektiver_Bestand":        st.column_config.NumberColumn("Eff. Bestand", format="%d"),
-                                "Verkaeufe L30":             st.column_config.NumberColumn("L30", format="%d"),
-                                "Verkaeufe L90":             st.column_config.NumberColumn("L90", format="%d"),
-                                "TV":                        st.column_config.NumberColumn("TV/Tag", format="%.2f",
-                                    help="Gewichteter Tagesverbrauch"),
-                                "Ziel_Menge":                st.column_config.NumberColumn("Ziel", format="%d",
-                                    help="Zielmenge für Ziel-Reichweite"),
-                                "Bedarf_roh":                st.column_config.NumberColumn("Bedarf roh", format="%.1f"),
-                                "Ve1":                       st.column_config.NumberColumn("Ve1", format="%d"),
-                                "Bestellmenge":              st.column_config.NumberColumn("Bestellmenge", format="%d"),
-                                "Rechnungs Netto Ek Ve1":    st.column_config.NumberColumn("EK (€)", format="%.2f"),
-                                "Bestellwert":               st.column_config.NumberColumn("Bestellwert (€)", format="%.2f"),
-                                "Reichweite (Tage)":         st.column_config.NumberColumn("Reichweite", format="%.1f",
-                                    help="Tage Reichweite nach Bestellung"),
-                            },
-                            use_container_width=True,
-                            hide_index=True,
-                        )
+                if _st == "bestellen":
+                    _header = f"{_icon} **{_hersteller}** — {_bw:,.2f} € ≥ MBW {_mbw:,.0f} €"
+                elif _st == "unter_mbw":
+                    _header = f"{_icon} **{_hersteller}** — {_bw:,.2f} € | fehlt {_fb:,.2f} € bis MBW {_mbw:,.0f} €"
+                else:
+                    _header = f"{_icon} **{_hersteller}** — kein Bestellbedarf"
+
+                with st.expander(_header, expanded=False):
+                    _df_pos = _info["df"].copy()
+                    _df_pos["Reichweite (Tage)"] = _df_pos.apply(
+                        lambda r: round((r["Effektiver_Bestand"] + r["Bestellmenge"]) / r["TV"], 1)
+                        if r["TV"] > 0 else None, axis=1
+                    )
+                    st.dataframe(
+                        _df_pos[[
+                            "Artikelname", "Pzn",
+                            "Lagerbestand", "Bestellmenge_letzte_Woche", "Effektiver_Bestand",
+                            "Verkaeufe L30", "Verkaeufe L90", "TV",
+                            "Ziel_Menge", "Bedarf_roh", "Ve1",
+                            "Bestellmenge", "Rechnungs Netto Ek Ve1", "Bestellwert",
+                            "Reichweite (Tage)",
+                        ]],
+                        column_config={
+                            "Artikelname":               st.column_config.TextColumn("Artikel", width="large"),
+                            "Pzn":                       st.column_config.TextColumn("PZN"),
+                            "Lagerbestand":              st.column_config.NumberColumn("Lager", format="%d"),
+                            "Bestellmenge_letzte_Woche": st.column_config.NumberColumn("Offen", format="%d",
+                                help="Bereits bestellt, noch nicht eingelagert"),
+                            "Effektiver_Bestand":        st.column_config.NumberColumn("Eff. Bestand", format="%d"),
+                            "Verkaeufe L30":             st.column_config.NumberColumn("L30", format="%d"),
+                            "Verkaeufe L90":             st.column_config.NumberColumn("L90", format="%d"),
+                            "TV":                        st.column_config.NumberColumn("TV/Tag", format="%.2f",
+                                help="Gewichteter Tagesverbrauch"),
+                            "Ziel_Menge":                st.column_config.NumberColumn("Ziel", format="%d",
+                                help="Zielmenge für Ziel-Reichweite"),
+                            "Bedarf_roh":                st.column_config.NumberColumn("Bedarf roh", format="%.1f"),
+                            "Ve1":                       st.column_config.NumberColumn("Ve1", format="%d"),
+                            "Bestellmenge":              st.column_config.NumberColumn("Bestellmenge", format="%d"),
+                            "Rechnungs Netto Ek Ve1":    st.column_config.NumberColumn("EK (€)", format="%.2f"),
+                            "Bestellwert":               st.column_config.NumberColumn("Bestellwert (€)", format="%.2f"),
+                            "Reichweite (Tage)":         st.column_config.NumberColumn("Reichweite", format="%.1f",
+                                help="Tage Reichweite nach Bestellung"),
+                        },
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
         st.divider()
 
