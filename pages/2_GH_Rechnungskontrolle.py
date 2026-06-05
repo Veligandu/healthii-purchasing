@@ -169,7 +169,7 @@ def get_gh_folder_id(_drive):
 
 def lade_monat_aus_drive(_drive, jahr, monat):
     """Lädt gespeicherten Monat aus Drive.
-    Gibt (df_roh, totals) zurück — df_roh=None falls keine Rohdaten vorhanden."""
+    Gibt (df_roh, totals, preise) zurück — df_roh=None falls keine Rohdaten vorhanden."""
     try:
         from googleapiclient.http import MediaIoBaseDownload
         folder_id = get_gh_folder_id(_drive)
@@ -178,7 +178,7 @@ def lade_monat_aus_drive(_drive, jahr, monat):
         res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
         files = res.get("files", [])
         if not files:
-            return None, {}
+            return None, {}, {}
         buf = io.BytesIO()
         dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=files[0]["id"]))
         done = False
@@ -194,9 +194,13 @@ def lade_monat_aus_drive(_drive, jahr, monat):
         if "Summen" in xls.sheet_names:
             df_t = pd.read_excel(xls, "Summen", dtype={"Beleg": str})
             totals = dict(zip(df_t["Beleg"], df_t["Warenwert_Beleg"]))
-        return df_roh, totals
+        preise = {}
+        if "Preise" in xls.sheet_names:
+            df_p = pd.read_excel(xls, "Preise", dtype={"PZN": str})
+            preise = dict(zip(df_p["PZN"], df_p["Preis"]))
+        return df_roh, totals, preise
     except Exception:
-        return None, {}
+        return None, {}, {}
 
 
 def monat_existiert_in_drive(_drive, jahr, monat):
@@ -211,13 +215,16 @@ def monat_existiert_in_drive(_drive, jahr, monat):
         return False
 
 
-def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, jahr, monat):
-    """Speichert Monatstabelle + Rohdaten + PDF-Summen als Excel in Drive."""
+def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, preise, jahr, monat):
+    """Speichert Monatstabelle + Rohdaten + PDF-Summen + Preise als Excel in Drive."""
     from googleapiclient.http import MediaIoBaseUpload
     folder_id = get_gh_folder_id(_drive)
     name = f"gh_rechnung_{jahr}_{monat:02d}.xlsx"
     df_totals = pd.DataFrame(
         [{"Beleg": b, "Warenwert_Beleg": t} for b, t in (totals or {}).items()]
+    )
+    df_preise = pd.DataFrame(
+        [{"PZN": p, "Preis": v} for p, v in (preise or {}).items()]
     )
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
@@ -226,6 +233,8 @@ def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, jahr, monat):
             df_roh.to_excel(w, index=False, sheet_name="Rohdaten")
         if not df_totals.empty:
             df_totals.to_excel(w, index=False, sheet_name="Summen")
+        if not df_preise.empty:
+            df_preise.to_excel(w, index=False, sheet_name="Preise")
     buf.seek(0)
     media = MediaIoBaseUpload(
         buf,
@@ -360,6 +369,54 @@ def parse_pdf(datei_bytes: bytes, dateiname: str) -> tuple[pd.DataFrame, float |
                 total_pdf = _preis(m_total.group(1))
     return pd.DataFrame(zeilen), total_pdf
 
+# ─── Preis-CSV-Parser ─────────────────────────────────────────────────────────
+
+def parse_preis_csv(datei_bytes: bytes) -> dict:
+    """Liest PZN → Healthii-EK-Preis aus CSV. Gibt {PZN(str, 8-stellig): preis(float)}.
+    Erkennt ; oder , als Trenner und deutsches (1.234,56) wie englisches (1234.56) Format."""
+    text = None
+    for enc in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            text = datei_bytes.decode(enc)
+            break
+        except Exception:
+            continue
+    if not text:
+        return {}
+    sep = ";" if text.count(";") >= text.count(",") else ","
+    df = pd.read_csv(io.StringIO(text), sep=sep, dtype=str).fillna("")
+    if df.empty or len(df.columns) < 2:
+        return {}
+
+    # PZN-Spalte: bevorzugt mit "pzn" im Namen, sonst erste Spalte
+    pzn_col = next((c for c in df.columns if "pzn" in str(c).lower()), df.columns[0])
+    # Preis-Spalte: bevorzugt mit healthii/ek/preis/price, sonst letzte andere Spalte
+    preis_col = None
+    for key in ("healthii", "ek", "preis", "price"):
+        preis_col = next((c for c in df.columns if key in str(c).lower() and c != pzn_col), None)
+        if preis_col:
+            break
+    if preis_col is None:
+        rest = [c for c in df.columns if c != pzn_col]
+        preis_col = rest[-1] if rest else None
+    if preis_col is None:
+        return {}
+
+    out = {}
+    for _, row in df.iterrows():
+        pzn = re.sub(r"\D", "", str(row[pzn_col]))
+        if not pzn:
+            continue
+        pzn = pzn.zfill(8)
+        raw = str(row[preis_col]).strip().replace("€", "").replace(" ", "")
+        if "," in raw:                       # deutsches Format: Tausenderpunkt weg, Komma→Punkt
+            raw = raw.replace(".", "").replace(",", ".")
+        try:
+            out[pzn] = float(raw)
+        except ValueError:
+            continue
+    return out
+
 # ─── Header ───────────────────────────────────────────────────────────────────
 
 logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logo.png")
@@ -424,6 +481,28 @@ with st.sidebar:
 
     st.divider()
 
+    # Healthii-EK-Preise (CSV: PZN + Preis) für den gewählten Monat
+    st.header("💶 Healthii-EK-Preise")
+    _preise_key = f"gh_preise_{jahr_auswahl}_{monat_auswahl:02d}"
+    preis_csv = st.file_uploader(
+        "Preisliste (CSV)",
+        type=["csv"],
+        help="CSV mit Spalten PZN und Preis (z. B. 'Healthii EK'). ; oder , als Trenner.",
+        key=f"preis_csv_{jahr_auswahl}_{monat_auswahl:02d}",
+    )
+    if st.button("▶ Preise laden", use_container_width=True, disabled=not preis_csv):
+        preise = parse_preis_csv(preis_csv.read())
+        if preise:
+            st.session_state[_preise_key] = preise
+            st.success(f"✓ {len(preise)} Preise geladen")
+        else:
+            st.error("Keine PZN/Preis-Paare erkannt. Spalten prüfen.")
+    _akt_preise = st.session_state.get(_preise_key) or {}
+    if _akt_preise:
+        st.caption(f"Aktuell {len(_akt_preise)} Preise hinterlegt.")
+
+    st.divider()
+
     # Gespeicherte Monate aus Drive laden
     if drive:
         st.header("📁 Gespeicherte Monate")
@@ -466,8 +545,9 @@ roh_key    = f"gh_roh_{jahr_auswahl}_{monat_auswahl:02d}"    # Rohzeilen pro Bel
 totals_key = f"gh_totals_{jahr_auswahl}_{monat_auswahl:02d}" # PDF-Summen pro Beleg
 agg_key    = f"gh_agg_{jahr_auswahl}_{monat_auswahl:02d}"    # aggregierte Monatstabelle
 pdf_key    = f"gh_pdfs_{jahr_auswahl}_{monat_auswahl:02d}"   # Original-PDF-Bytes pro Beleg
+preise_key = f"gh_preise_{jahr_auswahl}_{monat_auswahl:02d}" # PZN → Healthii-EK-Preis
 
-for k in [roh_key, totals_key, agg_key, pdf_key]:
+for k in [roh_key, totals_key, agg_key, pdf_key, preise_key]:
     if k not in st.session_state:
         st.session_state[k] = None
 
@@ -475,10 +555,13 @@ for k in [roh_key, totals_key, agg_key, pdf_key]:
 
 load_flag = f"gh_loaded_{jahr_auswahl}_{monat_auswahl:02d}"
 if drive and st.session_state[roh_key] is None and not st.session_state.get(load_flag):
-    df_roh_drive, totals_drive = lade_monat_aus_drive(drive, int(jahr_auswahl), monat_auswahl)
+    df_roh_drive, totals_drive, preise_drive = lade_monat_aus_drive(
+        drive, int(jahr_auswahl), monat_auswahl
+    )
     if df_roh_drive is not None and not df_roh_drive.empty:
         st.session_state[roh_key]    = df_roh_drive
         st.session_state[totals_key] = totals_drive
+        st.session_state[preise_key] = preise_drive
         st.session_state[pdf_key]    = lade_pdfs_aus_drive(drive, int(jahr_auswahl), monat_auswahl)
     st.session_state[load_flag] = True
 
@@ -693,22 +776,51 @@ if df_roh is not None and not df_roh.empty:
     )
     st.session_state[agg_key] = df_agg
 
-    st.dataframe(
-        df_agg,
-        column_config={
-            "PZN":      st.column_config.TextColumn("PZN"),
-            "Menge":    st.column_config.NumberColumn("Menge",         format="%d"),
-            "Warenwert": st.column_config.NumberColumn("Warenwert (€)", format="%.2f"),
-        },
-        use_container_width=True,
-        hide_index=True,
+    # Healthii-EK-Bewertung: Menge × hinterlegter Preis
+    preise = st.session_state.get(preise_key) or {}
+    df_disp = df_agg.copy()
+    df_disp["Healthii EK Preise"] = df_disp.apply(
+        lambda r: round(r["Menge"] * preise[r["PZN"]], 2) if r["PZN"] in preise else pd.NA,
+        axis=1,
     )
+    # Nicht bewertbare Zeilen nach oben, sonst nach Warenwert
+    df_disp["_unbewertet"] = df_disp["Healthii EK Preise"].isna()
+    df_disp = (
+        df_disp.sort_values(["_unbewertet", "Warenwert"], ascending=[False, False])
+        .reset_index(drop=True)
+    )
+
+    n_unbewertet = int(df_disp["_unbewertet"].sum())
+    if preise and n_unbewertet:
+        st.warning(f"{n_unbewertet} von {len(df_disp)} PZN konnten nicht bewertet werden "
+                   f"(kein Preis hinterlegt) — oben gelb markiert.")
+    elif not preise:
+        st.info("Keine Healthii-EK-Preise geladen — Spalte bleibt leer. "
+                "CSV links in der Sidebar hochladen.")
+
+    df_vis = df_disp.drop(columns=["_unbewertet"])
+
+    def _zeilen_stil(row):
+        gelb = "background-color: #FEF9C3"
+        return [gelb if pd.isna(row["Healthii EK Preise"]) else "" for _ in row]
+
+    styler = (
+        df_vis.style
+        .apply(_zeilen_stil, axis=1)
+        .format({
+            "Menge":              "{:.0f}",
+            "Warenwert":          lambda v: f"{v:.2f} €",
+            "Healthii EK Preise": lambda v: "—" if pd.isna(v) else f"{v:.2f} €",
+        })
+    )
+
+    st.dataframe(styler, use_container_width=True, hide_index=True)
 
     col_save, col_dl = st.columns(2)
 
     def _speichern_ausfuehren():
         speichere_monat_in_drive(
-            drive, df_agg, df_roh, totals, int(jahr_auswahl), monat_auswahl
+            drive, df_agg, df_roh, totals, preise, int(jahr_auswahl), monat_auswahl
         )
         pdfs_session = st.session_state.get(pdf_key) or {}
         speichere_pdfs_in_drive(drive, pdfs_session, int(jahr_auswahl), monat_auswahl)
@@ -749,7 +861,7 @@ if df_roh is not None and not df_roh.empty:
         _buf = io.BytesIO()
         with pd.ExcelWriter(_buf, engine="openpyxl") as _w:
             _sheet = f"Monat {monat_auswahl:02d}-{jahr_auswahl}"
-            df_agg.to_excel(_w, index=False, sheet_name=_sheet)
+            df_vis.to_excel(_w, index=False, sheet_name=_sheet)
             df_belege.to_excel(_w, index=False, sheet_name="Belegkontrolle")
         st.download_button(
             label="📥 Excel herunterladen",
