@@ -14,6 +14,11 @@ import pandas as pd
 import pdfplumber
 import streamlit as st
 
+try:
+    from streamlit_pdf_viewer import pdf_viewer
+except Exception:
+    pdf_viewer = None
+
 # ─── Seitenkonfiguration ──────────────────────────────────────────────────────
 
 st.set_page_config(
@@ -613,13 +618,22 @@ if df_roh is not None and not df_roh.empty:
         pdfs = st.session_state.get(pdf_key) or {}
         pdf_bytes = pdfs.get(beleg)
         if pdf_bytes:
-            b64 = base64.b64encode(pdf_bytes).decode()
-            st.markdown(
-                f'<iframe src="data:application/pdf;base64,{b64}" '
-                f'width="100%" height="820px" '
-                f'style="border:1px solid #E5E7EB;border-radius:10px;"></iframe>',
-                unsafe_allow_html=True,
-            )
+            if pdf_viewer is not None:
+                pdf_viewer(
+                    pdf_bytes,
+                    width="100%",
+                    height=820,
+                    key=f"pdfview_{beleg}",
+                )
+            else:
+                # Fallback: base64-iframe (wird von manchen Browsern blockiert)
+                b64 = base64.b64encode(pdf_bytes).decode()
+                st.markdown(
+                    f'<iframe src="data:application/pdf;base64,{b64}" '
+                    f'width="100%" height="820px" '
+                    f'style="border:1px solid #E5E7EB;border-radius:10px;"></iframe>',
+                    unsafe_allow_html=True,
+                )
             st.download_button(
                 "📥 PDF herunterladen",
                 data=pdf_bytes,
