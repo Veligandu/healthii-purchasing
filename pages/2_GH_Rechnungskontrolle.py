@@ -620,9 +620,6 @@ with st.sidebar:
         key=f"pdf_upl_{st.session_state.gh_upl_nonce}",
     )
 
-    nur_neue = st.checkbox("Bereits eingelesene überspringen", value=True,
-                           help="Liest nur Belege, die im aktuellen Monat noch nicht vorhanden sind.")
-
     verarbeiten = st.button("▶ Rechnungen einlesen", use_container_width=True, type="primary",
                              disabled=not uploads)
 
@@ -770,29 +767,15 @@ if verarbeiten and uploads:
     totals_neu  = {}   # beleg → total_pdf
     pdfs_neu    = {}   # beleg → original PDF-Bytes
     fehler = []
-    n_skip = 0
-
-    # Bereits vorhandene Belege im aktuellen Monat (zum Überspringen)
-    _df_vorhanden = st.session_state.get(roh_key)
-    vorhandene_belege = set()
-    if _df_vorhanden is not None and not _df_vorhanden.empty:
-        vorhandene_belege |= set(_df_vorhanden["Beleg"].astype(str))
-    vorhandene_belege |= {str(b) for b in (st.session_state.get(totals_key) or {})}
-    vorhandene_belege |= {str(b) for b in (st.session_state.get(pdf_key) or {})}
 
     fortschritt = st.progress(0, text="Lese PDFs …")
 
     for i, pdf_file in enumerate(uploads):
         fortschritt.progress((i + 1) / len(uploads), text=pdf_file.name)
         try:
-            # Anhand der Belegnummer im Dateinamen schon vorab überspringen (ohne PDF zu öffnen)
-            beleg_name = beleg_aus_dateiname(pdf_file.name)
-            if nur_neue and str(beleg_name) in vorhandene_belege:
-                n_skip += 1
-                continue
             raw = pdf_file.read()
             df_pdf, total_pdf = parse_pdf(raw, pdf_file.name)
-            beleg = df_pdf["Beleg"].iloc[0] if not df_pdf.empty else beleg_name
+            beleg = df_pdf["Beleg"].iloc[0] if not df_pdf.empty else beleg_aus_dateiname(pdf_file.name)
             if not df_pdf.empty:
                 alle_zeilen.append(df_pdf)
             # Beleg in jedem Fall führen (auch ohne Positionen) und PDF mitsichern
@@ -804,9 +787,6 @@ if verarbeiten and uploads:
     fortschritt.empty()
 
     msgs = []
-    if n_skip:
-        msgs.append(("info", f"{n_skip} bereits vorhandene Beleg(e) übersprungen."))
-
     if alle_zeilen or totals_neu:
         df_neu = pd.concat(alle_zeilen, ignore_index=True) if alle_zeilen else None
 
@@ -829,14 +809,11 @@ if verarbeiten and uploads:
         st.session_state[totals_key] = totals_alt
         st.session_state[pdf_key]    = pdfs_alt
 
-        msgs.append(("success", f"✓ {len(totals_neu)} neue(r) Beleg(e) eingelesen."))
-        for f in fehler:
-            msgs.append(("warning", f))
-    elif not n_skip:
-        msgs.append(("error", "Keine Daten konnten extrahiert werden."))
+        msgs.append(("success", f"✓ {len(totals_neu)} Beleg(e) eingelesen."))
         for f in fehler:
             msgs.append(("warning", f))
     else:
+        msgs.append(("error", "Keine Daten konnten extrahiert werden."))
         for f in fehler:
             msgs.append(("warning", f))
 
