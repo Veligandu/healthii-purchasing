@@ -154,10 +154,11 @@ drive = st.session_state.gh_drive
 # ─── Drive-Hilfsfunktionen ────────────────────────────────────────────────────
 
 GH_FOLDER_NAME = "GH-Rechnungen"
+GROSSHAENDLER  = ["Phoenix", "Gehe", "Alliance"]   # unterstützte Großhändler
 
 @st.cache_data(ttl=120, show_spinner=False)
 def get_gh_folder_id(_drive):
-    """Gibt ID des 'GH-Rechnungen'-Ordners in Drive zurück (legt ihn an falls nötig)."""
+    """Gibt ID des Hauptordners 'GH-Rechnungen' zurück (legt ihn an falls nötig)."""
     q = f"name='{GH_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
     res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
     files = res.get("files", [])
@@ -170,18 +171,36 @@ def get_gh_folder_id(_drive):
     return folder["id"]
 
 
-def lade_monat_aus_drive(_drive, jahr, monat):
-    """Lädt gespeicherten Monat aus Drive.
-    Gibt (df_roh, totals, preise) zurück — df_roh=None falls keine Rohdaten vorhanden."""
+@st.cache_data(ttl=120, show_spinner=False)
+def get_gh_subfolder_id(_drive, gh):
+    """Gibt ID des GH-Unterordners (z. B. 'GH-Rechnungen/Phoenix') zurück (legt ihn an)."""
+    parent = get_gh_folder_id(_drive)
+    q = (f"name='{gh}' and '{parent}' in parents "
+         f"and mimeType='application/vnd.google-apps.folder' and trashed=false")
+    res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
+    files = res.get("files", [])
+    if files:
+        return files[0]["id"]
+    folder = _drive.files().create(
+        body={"name": gh, "parents": [parent],
+              "mimeType": "application/vnd.google-apps.folder"},
+        fields="id",
+    ).execute()
+    return folder["id"]
+
+
+def lade_monat_aus_drive(_drive, gh, jahr, monat):
+    """Lädt gespeicherten Monat eines GH aus Drive.
+    Gibt (df_roh, totals, abr, report) zurück — df_roh=None falls keine Rohdaten."""
     try:
         from googleapiclient.http import MediaIoBaseDownload
-        folder_id = get_gh_folder_id(_drive)
+        folder_id = get_gh_subfolder_id(_drive, gh)
         name = f"gh_rechnung_{jahr}_{monat:02d}.xlsx"
         q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
         res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
         files = res.get("files", [])
         if not files:
-            return None, {}, {}, {}, ""
+            return None, {}, {}, ""
         buf = io.BytesIO()
         dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=files[0]["id"]))
         done = False
@@ -197,10 +216,6 @@ def lade_monat_aus_drive(_drive, jahr, monat):
         if "Summen" in xls.sheet_names:
             df_t = pd.read_excel(xls, "Summen", dtype={"Beleg": str})
             totals = dict(zip(df_t["Beleg"], df_t["Warenwert_Beleg"]))
-        preise = {}
-        if "Preise" in xls.sheet_names:
-            df_p = pd.read_excel(xls, "Preise", dtype={"PZN": str})
-            preise = dict(zip(df_p["PZN"], df_p["Preis"]))
         abr = {}
         if "Abrechnung" in xls.sheet_names:
             df_a = pd.read_excel(xls, "Abrechnung", dtype={"Rechnungsnr": str})
@@ -215,15 +230,15 @@ def lade_monat_aus_drive(_drive, jahr, monat):
             if not df_rep.empty and "Report" in df_rep.columns:
                 v = df_rep["Report"].iloc[0]
                 report = "" if pd.isna(v) else str(v)
-        return df_roh, totals, preise, abr, report
+        return df_roh, totals, abr, report
     except Exception:
-        return None, {}, {}, {}, ""
+        return None, {}, {}, ""
 
 
-def monat_existiert_in_drive(_drive, jahr, monat):
-    """True, wenn für den Monat bereits eine gespeicherte Datei in Drive liegt."""
+def monat_existiert_in_drive(_drive, gh, jahr, monat):
+    """True, wenn für GH+Monat bereits eine gespeicherte Datei in Drive liegt."""
     try:
-        folder_id = get_gh_folder_id(_drive)
+        folder_id = get_gh_subfolder_id(_drive, gh)
         name = f"gh_rechnung_{jahr}_{monat:02d}.xlsx"
         q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
         res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
@@ -232,16 +247,13 @@ def monat_existiert_in_drive(_drive, jahr, monat):
         return False
 
 
-def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, preise, abr, report, jahr, monat):
-    """Speichert Monatstabelle + Rohdaten + Summen + Preise + Abrechnung + Report als Excel."""
+def speichere_monat_in_drive(_drive, gh, df_agg, df_roh, totals, abr, report, jahr, monat):
+    """Speichert Monatstabelle + Rohdaten + Summen + Abrechnung + Report als Excel (pro GH)."""
     from googleapiclient.http import MediaIoBaseUpload
-    folder_id = get_gh_folder_id(_drive)
+    folder_id = get_gh_subfolder_id(_drive, gh)
     name = f"gh_rechnung_{jahr}_{monat:02d}.xlsx"
     df_totals = pd.DataFrame(
         [{"Beleg": b, "Warenwert_Beleg": t} for b, t in (totals or {}).items()]
-    )
-    df_preise = pd.DataFrame(
-        [{"PZN": p, "Preis": v} for p, v in (preise or {}).items()]
     )
     df_abr = pd.DataFrame(
         [{"Rechnungsnr": n, "Datum": _abr_norm(v)[0], "Betrag": _abr_norm(v)[1]}
@@ -254,8 +266,6 @@ def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, preise, abr, report
             df_roh.to_excel(w, index=False, sheet_name="Rohdaten")
         if not df_totals.empty:
             df_totals.to_excel(w, index=False, sheet_name="Summen")
-        if not df_preise.empty:
-            df_preise.to_excel(w, index=False, sheet_name="Preise")
         if not df_abr.empty:
             df_abr.to_excel(w, index=False, sheet_name="Abrechnung")
         if report:
@@ -277,9 +287,9 @@ def speichere_monat_in_drive(_drive, df_agg, df_roh, totals, preise, abr, report
         ).execute()
 
 
-def get_pdf_folder_id(_drive, jahr, monat, anlegen=True, prefix="pdfs"):
-    """ID eines Monats-Unterordners in 'GH-Rechnungen'. None falls fehlend und anlegen=False."""
-    parent = get_gh_folder_id(_drive)
+def get_pdf_folder_id(_drive, gh, jahr, monat, anlegen=True, prefix="pdfs"):
+    """ID eines Monats-Unterordners im GH-Ordner. None falls fehlend und anlegen=False."""
+    parent = get_gh_subfolder_id(_drive, gh)
     fname = f"{prefix}_{jahr}_{monat:02d}"
     q = (f"name='{fname}' and '{parent}' in parents "
          f"and mimeType='application/vnd.google-apps.folder' and trashed=false")
@@ -297,13 +307,13 @@ def get_pdf_folder_id(_drive, jahr, monat, anlegen=True, prefix="pdfs"):
     return folder["id"]
 
 
-def speichere_pdfs_in_drive(_drive, pdfs, jahr, monat):
+def speichere_pdfs_in_drive(_drive, gh, pdfs, jahr, monat):
     """Lädt nur noch nicht abgelegte Original-PDFs in den Monats-Unterordner hoch.
     Gibt die Anzahl neu hochgeladener PDFs zurück."""
     from googleapiclient.http import MediaIoBaseUpload
     if not pdfs:
         return 0
-    folder_id = get_pdf_folder_id(_drive, jahr, monat, anlegen=True)
+    folder_id = get_pdf_folder_id(_drive, gh, jahr, monat, anlegen=True)
     neu = 0
     for beleg, raw in pdfs.items():
         name = f"INVOICE-{beleg}.pdf"
@@ -320,12 +330,12 @@ def speichere_pdfs_in_drive(_drive, pdfs, jahr, monat):
     return neu
 
 
-def lade_pdfs_aus_drive(_drive, jahr, monat):
+def lade_pdfs_aus_drive(_drive, gh, jahr, monat):
     """Lädt alle Original-PDFs des Monats. Gibt dict beleg → bytes zurück."""
     from googleapiclient.http import MediaIoBaseDownload
     out = {}
     try:
-        folder_id = get_pdf_folder_id(_drive, jahr, monat, anlegen=False)
+        folder_id = get_pdf_folder_id(_drive, gh, jahr, monat, anlegen=False)
         if not folder_id:
             return out
         res = _drive.files().list(
@@ -346,11 +356,11 @@ def lade_pdfs_aus_drive(_drive, jahr, monat):
     return out
 
 
-def lade_pdf_aus_drive(_drive, jahr, monat, beleg):
+def lade_pdf_aus_drive(_drive, gh, jahr, monat, beleg):
     """Lädt ein einzelnes Original-PDF (INVOICE-<beleg>.pdf) aus Drive. None falls fehlend."""
     from googleapiclient.http import MediaIoBaseDownload
     try:
-        folder_id = get_pdf_folder_id(_drive, jahr, monat, anlegen=False)
+        folder_id = get_pdf_folder_id(_drive, gh, jahr, monat, anlegen=False)
         if not folder_id:
             return None
         name = f"INVOICE-{beleg}.pdf"
@@ -368,13 +378,13 @@ def lade_pdf_aus_drive(_drive, jahr, monat, beleg):
         return None
 
 
-def speichere_abr_pdfs_in_drive(_drive, pdfs, jahr, monat):
+def speichere_abr_pdfs_in_drive(_drive, gh, pdfs, jahr, monat):
     """Speichert nur noch nicht abgelegte Monatsabrechnungs-PDFs im Unterordner.
     Gibt die Anzahl neu hochgeladener PDFs zurück."""
     from googleapiclient.http import MediaIoBaseUpload
     if not pdfs:
         return 0
-    folder_id = get_pdf_folder_id(_drive, jahr, monat, anlegen=True, prefix="abrechnungen")
+    folder_id = get_pdf_folder_id(_drive, gh, jahr, monat, anlegen=True, prefix="abrechnungen")
     neu = 0
     for name, raw in pdfs.items():
         name = str(name).replace("'", "_")
@@ -391,12 +401,12 @@ def speichere_abr_pdfs_in_drive(_drive, pdfs, jahr, monat):
     return neu
 
 
-def lade_abr_pdfs_aus_drive(_drive, jahr, monat):
+def lade_abr_pdfs_aus_drive(_drive, gh, jahr, monat):
     """Lädt die Monatsabrechnungs-PDFs des Monats. Gibt dict dateiname → bytes zurück."""
     from googleapiclient.http import MediaIoBaseDownload
     out = {}
     try:
-        folder_id = get_pdf_folder_id(_drive, jahr, monat, anlegen=False, prefix="abrechnungen")
+        folder_id = get_pdf_folder_id(_drive, gh, jahr, monat, anlegen=False, prefix="abrechnungen")
         if not folder_id:
             return out
         res = _drive.files().list(
@@ -413,6 +423,73 @@ def lade_abr_pdfs_aus_drive(_drive, jahr, monat):
     except Exception:
         pass
     return out
+
+
+# ─── Zentrale Healthii-EK-Preisliste (GH-übergreifend) ────────────────────────
+
+PREISE_MASTER_NAME = "preise_master.xlsx"
+
+def speichere_preise_master(_drive, df_raw):
+    """Speichert die Preis-Rohdaten (PZN, Preis, valid_from, valid_till) zentral in Drive."""
+    from googleapiclient.http import MediaIoBaseUpload
+    folder_id = get_gh_folder_id(_drive)
+    buf = io.BytesIO()
+    df_raw.to_excel(buf, index=False, sheet_name="Preise")
+    buf.seek(0)
+    media = MediaIoBaseUpload(
+        buf, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    q = f"name='{PREISE_MASTER_NAME}' and '{folder_id}' in parents and trashed=false"
+    existing = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
+    if existing:
+        _drive.files().update(fileId=existing[0]["id"], media_body=media).execute()
+    else:
+        _drive.files().create(
+            body={"name": PREISE_MASTER_NAME, "parents": [folder_id]},
+            media_body=media, fields="id",
+        ).execute()
+
+
+def lade_preise_master(_drive):
+    """Lädt die zentrale Preis-Rohdaten-Tabelle. Gibt DataFrame oder None zurück."""
+    try:
+        from googleapiclient.http import MediaIoBaseDownload
+        folder_id = get_gh_folder_id(_drive)
+        q = f"name='{PREISE_MASTER_NAME}' and '{folder_id}' in parents and trashed=false"
+        files = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
+        if not files:
+            return None
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=files[0]["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        buf.seek(0)
+        return pd.read_excel(buf, dtype={"PZN": str})
+    except Exception:
+        return None
+
+
+def migriere_phoenix_in_unterordner(_drive):
+    """Verschiebt bestehende Dateien/Ordner aus dem GH-Hauptordner nach 'Phoenix/'.
+    Betrifft gh_rechnung_*.xlsx, pdfs_* und abrechnungen_*. Gibt Anzahl verschoben zurück."""
+    root = get_gh_folder_id(_drive)
+    phoenix = get_gh_subfolder_id(_drive, "Phoenix")
+    res = _drive.files().list(
+        q=f"'{root}' in parents and trashed=false",
+        fields="files(id,name,mimeType)", pageSize=400,
+    ).execute()
+    n = 0
+    for f in res.get("files", []):
+        name = f["name"]
+        ist_ordner = f["mimeType"] == "application/vnd.google-apps.folder"
+        passt = (name.startswith("gh_rechnung_") or
+                 (ist_ordner and (name.startswith("pdfs_") or name.startswith("abrechnungen_"))))
+        if not passt:
+            continue
+        _drive.files().update(fileId=f["id"], addParents=phoenix,
+                              removeParents=root, fields="id").execute()
+        n += 1
+    return n
 
 # ─── PDF-Parser ───────────────────────────────────────────────────────────────
 
@@ -446,8 +523,8 @@ def beleg_aus_dateiname(name: str) -> str:
     return m.group(1) if m else name
 
 
-def parse_pdf(datei_bytes: bytes, dateiname: str) -> tuple[pd.DataFrame, float | None]:
-    """Gibt (DataFrame mit Positionen, Rechnungssumme aus PDF) zurück."""
+def parse_phoenix_sammel(datei_bytes: bytes, dateiname: str) -> tuple[pd.DataFrame, float | None]:
+    """Phoenix-Sammelrechnung. Gibt (DataFrame mit Positionen, Rechnungssumme) zurück."""
     jahr, monat, _ = datum_aus_dateiname(dateiname)
     beleg = beleg_aus_dateiname(dateiname)
     zeilen = []
@@ -484,13 +561,11 @@ def _preis_zu_float(raw: str):
         return None
 
 
-def parse_preis_csv(datei_bytes: bytes, jahr: int, monat: int) -> dict:
-    """Liest PZN → Healthii-EK-Preis aus CSV, gefiltert auf Gültigkeit im Monat.
-    Gibt {PZN(str, 8-stellig): preis(float)}.
-
-    Erkennt ; oder , als Trenner, deutsches/englisches Dezimalformat sowie
-    optionale Spalten valid_from / valid_till (ISO-Datum). Liegt der Monat
-    außerhalb der Gültigkeit, wird die PZN nicht bewertet."""
+def parse_preis_csv_raw(datei_bytes: bytes) -> pd.DataFrame:
+    """Liest die Preis-CSV in eine normierte Rohtabelle:
+    Spalten PZN (8-stellig), Preis (float), valid_from (ISO|''), valid_till (ISO|'').
+    Erkennt ; oder , als Trenner und deutsches/englisches Dezimalformat."""
+    leer = pd.DataFrame(columns=["PZN", "Preis", "valid_from", "valid_till"])
     text = None
     for enc in ("utf-8-sig", "utf-8", "latin-1"):
         try:
@@ -499,11 +574,11 @@ def parse_preis_csv(datei_bytes: bytes, jahr: int, monat: int) -> dict:
         except Exception:
             continue
     if not text:
-        return {}
+        return leer
     sep = ";" if text.count(";") >= text.count(",") else ","
     df = pd.read_csv(io.StringIO(text), sep=sep, dtype=str).fillna("")
     if df.empty or len(df.columns) < 2:
-        return {}
+        return leer
 
     cols = {str(c).lower(): c for c in df.columns}
 
@@ -520,39 +595,52 @@ def parse_preis_csv(datei_bytes: bytes, jahr: int, monat: int) -> dict:
         rest = [c for c in df.columns if c != pzn_col]
         preis_col = rest[-1] if rest else None
     if preis_col is None:
-        return {}
+        return leer
     from_col = _find("valid_from", "gueltig_von", "von", exclude=pzn_col)
     till_col = _find("valid_till", "valid_to", "gueltig_bis", "bis", exclude=pzn_col)
 
-    # Monatsfenster
-    monatsstart = pd.Timestamp(year=int(jahr), month=int(monat), day=1)
-    monatsende  = monatsstart + pd.offsets.MonthEnd(0)
-
-    # je PZN den im Monat gültigen Eintrag mit jüngstem valid_from wählen
-    best = {}   # pzn → (valid_from_ts, preis)
+    zeilen = []
     for _, row in df.iterrows():
         pzn = re.sub(r"\D", "", str(row[pzn_col]))
         if not pzn:
             continue
-        pzn = pzn.zfill(8)
         preis = _preis_zu_float(row[preis_col])
         if preis is None:
             continue
-
         vf = pd.to_datetime(row[from_col], errors="coerce") if from_col else pd.NaT
         vt = pd.to_datetime(row[till_col], errors="coerce") if till_col else pd.NaT
+        zeilen.append({
+            "PZN":        pzn.zfill(8),
+            "Preis":      preis,
+            "valid_from": vf.date().isoformat() if pd.notna(vf) else "",
+            "valid_till": vt.date().isoformat() if pd.notna(vt) else "",
+        })
+    return pd.DataFrame(zeilen, columns=["PZN", "Preis", "valid_from", "valid_till"])
 
-        # Gültigkeit prüfen: Überlappung mit dem Monat (offene Grenzen erlaubt)
-        if from_col or till_col:
-            if pd.notna(vf) and vf > monatsende:
-                continue
-            if pd.notna(vt) and vt < monatsstart:
-                continue
 
+def resolve_preise(df_raw, jahr: int, monat: int) -> dict:
+    """Löst aus der Preis-Rohtabelle die im Monat gültigen Preise auf.
+    Gibt {PZN(str): preis(float)}; je PZN der Eintrag mit jüngstem valid_from."""
+    if df_raw is None or df_raw.empty:
+        return {}
+    monatsstart = pd.Timestamp(year=int(jahr), month=int(monat), day=1)
+    monatsende  = monatsstart + pd.offsets.MonthEnd(0)
+    best = {}   # pzn → (valid_from_ts, preis)
+    for _, row in df_raw.iterrows():
+        pzn = str(row["PZN"]).zfill(8)
+        try:
+            preis = float(row["Preis"])
+        except (ValueError, TypeError):
+            continue
+        vf = pd.to_datetime(row.get("valid_from"), errors="coerce")
+        vt = pd.to_datetime(row.get("valid_till"), errors="coerce")
+        if pd.notna(vf) and vf > monatsende:
+            continue
+        if pd.notna(vt) and vt < monatsstart:
+            continue
         rank = vf if pd.notna(vf) else pd.Timestamp.min
         if pzn not in best or rank >= best[pzn][0]:
             best[pzn] = (rank, preis)
-
     return {pzn: preis for pzn, (_, preis) in best.items()}
 
 # ─── Monatsabrechnung-Parser (GH) ─────────────────────────────────────────────
@@ -563,7 +651,7 @@ _ABR_RE = re.compile(
     re.MULTILINE,
 )
 
-def parse_abrechnung(datei_bytes: bytes) -> dict:
+def parse_phoenix_abr(datei_bytes: bytes) -> dict:
     """Liest aus einer Phoenix-Monatsabrechnung die abgerechneten Rechnungsnummern.
     Gibt {rechnungsnr(str): {"datum": ISO-str|None, "betrag": float}} zurück."""
     out = {}
@@ -587,6 +675,18 @@ def _abr_norm(v):
     if isinstance(v, dict):
         return v.get("datum"), v.get("betrag")
     return None, v
+
+
+# ─── Parser-Registry pro Großhändler ──────────────────────────────────────────
+# "sammel":     fn(datei_bytes, dateiname) -> (DataFrame[PZN,Menge,EK_ohne_MWSt,Warenwert,
+#                                              Beleg,Jahr,Monat], rechnungssumme|None)
+# "abrechnung": fn(datei_bytes) -> {rechnungsnr: {"datum":…, "betrag":…}}
+# None = Parser noch nicht implementiert.
+PARSER = {
+    "Phoenix":  {"sammel": parse_phoenix_sammel, "abrechnung": parse_phoenix_abr},
+    "Gehe":     {"sammel": None,                 "abrechnung": None},
+    "Alliance": {"sammel": None,                 "abrechnung": None},
+}
 
 # ─── Header ───────────────────────────────────────────────────────────────────
 
@@ -618,20 +718,29 @@ st.markdown(f"""
 
 # ─── Sidebar: Monatsauswahl + Upload ──────────────────────────────────────────
 
-with st.sidebar:
-    st.header("📄 Rechnungen hochladen")
+# Zentrale Preisliste einmalig je Sitzung laden
+if drive and "gh_preise_master" not in st.session_state:
+    st.session_state["gh_preise_master"] = lade_preise_master(drive)
 
+with st.sidebar:
     heute = date.today()
 
     # Klick auf gespeicherten Monat: Auswahl vor Erzeugung der Widgets übernehmen
     if "gh_pending" in st.session_state:
-        _pj, _pm = st.session_state.pop("gh_pending")
-        st.session_state["gh_jahr"]  = _pj
-        st.session_state["gh_monat"] = _pm
+        _pgh, _pj, _pm = st.session_state.pop("gh_pending")
+        st.session_state["gh_haendler"] = _pgh
+        st.session_state["gh_jahr"]     = _pj
+        st.session_state["gh_monat"]    = _pm
+    if "gh_haendler" not in st.session_state:
+        st.session_state["gh_haendler"] = GROSSHAENDLER[0]
     if "gh_monat" not in st.session_state:
         st.session_state["gh_monat"] = heute.month
     if "gh_jahr" not in st.session_state:
         st.session_state["gh_jahr"] = heute.year
+
+    gh_auswahl = st.selectbox("🏢 Großhändler", GROSSHAENDLER, key="gh_haendler")
+
+    st.header("📄 Rechnungen hochladen")
 
     col_m, col_j = st.columns(2)
     monat_auswahl = col_m.selectbox("Monat", list(range(1, 13)),
@@ -643,10 +752,10 @@ with st.sidebar:
     if "gh_upl_nonce" not in st.session_state:
         st.session_state.gh_upl_nonce = 0
     uploads = st.file_uploader(
-        "PDF-Rechnungen",
+        f"PDF-Rechnungen ({gh_auswahl})",
         type=["pdf"],
         accept_multiple_files=True,
-        help="Mehrere Phoenix-Sammelrechnungen auf einmal auswählen",
+        help=f"Mehrere {gh_auswahl}-Sammelrechnungen auf einmal auswählen",
         key=f"pdf_upl_{st.session_state.gh_upl_nonce}",
     )
 
@@ -655,47 +764,58 @@ with st.sidebar:
 
     st.divider()
 
-    # Healthii-EK-Preise (CSV: PZN + Preis) für den gewählten Monat
+    # Healthii-EK-Preise: zentrale Master-Liste (gilt für alle GHs/Monate)
     st.header("💶 Healthii-EK-Preise")
-    _preise_key = f"gh_preise_{jahr_auswahl}_{monat_auswahl:02d}"
+    st.caption("Zentrale Preisliste — gilt für alle Großhändler. Upload ersetzt die bisherige.")
     preis_csv = st.file_uploader(
         "Preisliste (CSV)",
         type=["csv"],
-        help="CSV mit Spalten PZN und Preis (z. B. 'Healthii EK'). ; oder , als Trenner.",
-        key=f"preis_csv_{jahr_auswahl}_{monat_auswahl:02d}",
+        help="CSV mit PZN, Preis und optional valid_from/valid_till. ; oder , als Trenner.",
+        key="preis_csv_master",
     )
-    if st.button("▶ Preise laden", use_container_width=True, disabled=not preis_csv):
-        preise = parse_preis_csv(preis_csv.read(), int(jahr_auswahl), monat_auswahl)
-        if preise:
-            st.session_state[_preise_key] = preise
-            st.success(f"✓ {len(preise)} im Monat gültige Preise geladen")
+    if st.button("▶ Preise aktualisieren", use_container_width=True, disabled=not preis_csv):
+        df_raw = parse_preis_csv_raw(preis_csv.read())
+        if not df_raw.empty:
+            st.session_state["gh_preise_master"] = df_raw
+            ok = True
+            if drive:
+                try:
+                    speichere_preise_master(drive, df_raw)
+                except Exception as e:
+                    ok = False
+                    st.error(f"Drive-Fehler beim Speichern der Preise: {e}")
+            if ok:
+                st.success(f"✓ {len(df_raw)} Preiszeilen aktualisiert"
+                           + (" und in Drive gespeichert" if drive else ""))
         else:
-            st.error("Keine im Monat gültigen PZN/Preis-Paare erkannt. Spalten/Datum prüfen.")
-    _akt_preise = st.session_state.get(_preise_key) or {}
-    if _akt_preise:
-        st.caption(f"Aktuell {len(_akt_preise)} Preise hinterlegt.")
+            st.error("Keine PZN/Preis-Paare erkannt. Spalten prüfen.")
+    _pm = st.session_state.get("gh_preise_master")
+    if _pm is not None and not _pm.empty:
+        st.caption(f"Aktuell {len(_pm)} Preiszeilen in der zentralen Liste.")
 
     st.divider()
 
     # Monatsabrechnungen (GH): listen die abgerechneten Rechnungsnummern
     st.header("📑 Monatsabrechnungen")
-    _abr_key = f"gh_abr_{jahr_auswahl}_{monat_auswahl:02d}"
+    _abr_key    = f"gh_abr_{gh_auswahl}_{jahr_auswahl}_{monat_auswahl:02d}"
+    _abrpdf_key = f"gh_abrpdfs_{gh_auswahl}_{jahr_auswahl}_{monat_auswahl:02d}"
     abr_uploads = st.file_uploader(
-        "Abrechnungen (PDF)",
+        f"Abrechnungen ({gh_auswahl}, PDF)",
         type=["pdf"],
         accept_multiple_files=True,
         help="Die GH-Monatsabrechnungen (z. B. 10., 20., Ultimo) auf einmal auswählen.",
-        key=f"abr_upload_{jahr_auswahl}_{monat_auswahl:02d}",
+        key=f"abr_upload_{gh_auswahl}_{jahr_auswahl}_{monat_auswahl:02d}",
     )
-    _abrpdf_key = f"gh_abrpdfs_{jahr_auswahl}_{monat_auswahl:02d}"
-    if st.button("▶ Abrechnungen einlesen", use_container_width=True, disabled=not abr_uploads):
+    _abr_parser = PARSER.get(gh_auswahl, {}).get("abrechnung")
+    if st.button("▶ Abrechnungen einlesen", use_container_width=True,
+                 disabled=not abr_uploads or _abr_parser is None):
         abr_neu    = dict(st.session_state.get(_abr_key) or {})
         abrpdf_neu = dict(st.session_state.get(_abrpdf_key) or {})
         n_dok = 0
         for f in abr_uploads:
             try:
                 raw = f.read()
-                gefunden = parse_abrechnung(raw)
+                gefunden = _abr_parser(raw)
                 abr_neu.update(gefunden)
                 abrpdf_neu[f.name] = raw
                 n_dok += 1
@@ -707,6 +827,8 @@ with st.sidebar:
             st.success(f"✓ {n_dok} Abrechnung(en) gelesen — {len(abr_neu)} Rechnungsnummern")
         else:
             st.error("Keine Rechnungsnummern erkannt.")
+    if _abr_parser is None:
+        st.info(f"Abrechnungs-Parser für {gh_auswahl} folgt.")
     _akt_abr = st.session_state.get(_abr_key) or {}
     if _akt_abr:
         st.caption(f"Aktuell {len(_akt_abr)} abgerechnete Rechnungsnummern.")
@@ -717,14 +839,14 @@ with st.sidebar:
 
     st.divider()
 
-    # Gespeicherte Monate aus Drive laden
+    # Gespeicherte Monate aus Drive laden (pro GH)
     if drive:
-        st.header("📁 Gespeicherte Monate")
+        st.header(f"📁 Gespeicherte Monate ({gh_auswahl})")
         if st.button("🔄 Liste aktualisieren", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
         try:
-            folder_id = get_gh_folder_id(drive)
+            folder_id = get_gh_subfolder_id(drive, gh_auswahl)
             _res = drive.files().list(
                 q=f"'{folder_id}' in parents and trashed=false and name contains 'gh_rechnung'",
                 fields="files(id,name)",
@@ -740,32 +862,42 @@ with st.sidebar:
                         _yy, _mm = int(_m.group(1)), int(_m.group(2))
                         _aktiv = (_yy == int(jahr_auswahl) and _mm == monat_auswahl)
                         if st.button(f"{'📂' if _aktiv else '✓'} {_mm:02d}/{_yy}",
-                                     key=f"open_{_yy}_{_mm}",
+                                     key=f"open_{gh_auswahl}_{_yy}_{_mm}",
                                      use_container_width=True,
                                      type="primary" if _aktiv else "secondary"):
-                            st.session_state["gh_pending"] = (_yy, _mm)
+                            st.session_state["gh_pending"] = (gh_auswahl, _yy, _mm)
                             st.rerun()
             else:
                 st.caption("Noch keine gespeicherten Monate.")
         except Exception:
             pass
 
+        # Einmalige Migration der Alt-Phoenix-Daten in den Unterordner
+        with st.expander("⚙️ Wartung"):
+            if st.button("Phoenix-Daten in Unterordner migrieren", use_container_width=True):
+                try:
+                    n = migriere_phoenix_in_unterordner(drive)
+                    st.cache_data.clear()
+                    st.success(f"✓ {n} Einträge nach 'Phoenix/' verschoben.")
+                except Exception as e:
+                    st.error(f"Migration fehlgeschlagen: {e}")
+
 # ─── Haupt-Bereich ────────────────────────────────────────────────────────────
 
-monat_label = f"{monat_auswahl:02d}/{jahr_auswahl}"
+monat_label = f"{gh_auswahl} · {monat_auswahl:02d}/{jahr_auswahl}"
 
-# Session State-Keys
-roh_key    = f"gh_roh_{jahr_auswahl}_{monat_auswahl:02d}"    # Rohzeilen pro Beleg
-totals_key = f"gh_totals_{jahr_auswahl}_{monat_auswahl:02d}" # PDF-Summen pro Beleg
-agg_key    = f"gh_agg_{jahr_auswahl}_{monat_auswahl:02d}"    # aggregierte Monatstabelle
-pdf_key    = f"gh_pdfs_{jahr_auswahl}_{monat_auswahl:02d}"   # Original-PDF-Bytes pro Beleg
-preise_key = f"gh_preise_{jahr_auswahl}_{monat_auswahl:02d}" # PZN → Healthii-EK-Preis
-abr_key    = f"gh_abr_{jahr_auswahl}_{monat_auswahl:02d}"    # Rechnungsnr → Betrag laut Abrechnung
-abrpdf_key = f"gh_abrpdfs_{jahr_auswahl}_{monat_auswahl:02d}" # Abrechnungs-PDFs (dateiname → bytes)
-report_key = f"gh_report_{jahr_auswahl}_{monat_auswahl:02d}"   # persistenter Report-Wert
-rep_wkey   = f"report_input_{jahr_auswahl}_{monat_auswahl:02d}" # Widget-Key des Textfelds
+# Session State-Keys (pro GH + Monat)
+_ns = f"{gh_auswahl}_{jahr_auswahl}_{monat_auswahl:02d}"
+roh_key    = f"gh_roh_{_ns}"      # Rohzeilen pro Beleg
+totals_key = f"gh_totals_{_ns}"   # PDF-Summen pro Beleg
+agg_key    = f"gh_agg_{_ns}"      # aggregierte Monatstabelle
+pdf_key    = f"gh_pdfs_{_ns}"     # Original-PDF-Bytes pro Beleg
+abr_key    = f"gh_abr_{_ns}"      # Rechnungsnr → {datum, betrag} laut Abrechnung
+abrpdf_key = f"gh_abrpdfs_{_ns}"  # Abrechnungs-PDFs (dateiname → bytes)
+report_key = f"gh_report_{_ns}"   # persistenter Report-Wert
+rep_wkey   = f"report_input_{_ns}" # Widget-Key des Textfelds
 
-for k in [roh_key, totals_key, agg_key, pdf_key, preise_key, abr_key, abrpdf_key]:
+for k in [roh_key, totals_key, agg_key, pdf_key, abr_key, abrpdf_key]:
     if k not in st.session_state:
         st.session_state[k] = None
 if report_key not in st.session_state:
@@ -777,24 +909,23 @@ def _report_sichern():
     if rep_wkey in st.session_state:
         st.session_state[report_key] = st.session_state[rep_wkey] or ""
 
-# ─── Gespeicherten Monat automatisch aus Drive laden (einmalig je Monat) ──────
+# ─── Gespeicherten Monat automatisch aus Drive laden (einmalig je GH+Monat) ───
 
-load_flag = f"gh_loaded_{jahr_auswahl}_{monat_auswahl:02d}"
+load_flag = f"gh_loaded_{_ns}"
 if drive and st.session_state[roh_key] is None and not st.session_state.get(load_flag):
-    if monat_existiert_in_drive(drive, int(jahr_auswahl), monat_auswahl):
-        df_roh_drive, totals_drive, preise_drive, abr_drive, report_drive = lade_monat_aus_drive(
-            drive, int(jahr_auswahl), monat_auswahl
+    if monat_existiert_in_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl):
+        df_roh_drive, totals_drive, abr_drive, report_drive = lade_monat_aus_drive(
+            drive, gh_auswahl, int(jahr_auswahl), monat_auswahl
         )
         st.session_state[roh_key] = (
             df_roh_drive if df_roh_drive is not None
             else pd.DataFrame(columns=["PZN", "Menge", "EK_ohne_MWSt", "Warenwert", "Beleg", "Jahr", "Monat"])
         )
         st.session_state[totals_key] = totals_drive
-        st.session_state[preise_key] = preise_drive
         st.session_state[abr_key]    = abr_drive
         st.session_state[report_key] = report_drive
-        st.session_state[pdf_key]    = lade_pdfs_aus_drive(drive, int(jahr_auswahl), monat_auswahl)
-        st.session_state[abrpdf_key] = lade_abr_pdfs_aus_drive(drive, int(jahr_auswahl), monat_auswahl)
+        st.session_state[pdf_key]    = lade_pdfs_aus_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl)
+        st.session_state[abrpdf_key] = lade_abr_pdfs_aus_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl)
     st.session_state[load_flag] = True
 
 # ─── PDFs einlesen ────────────────────────────────────────────────────────────
@@ -803,7 +934,11 @@ if drive and st.session_state[roh_key] is None and not st.session_state.get(load
 for _lvl, _txt in st.session_state.pop("gh_upl_msgs", []):
     getattr(st, _lvl)(_txt)
 
-if verarbeiten and uploads:
+_sammel_parser = PARSER.get(gh_auswahl, {}).get("sammel")
+
+if verarbeiten and uploads and _sammel_parser is None:
+    st.warning(f"Sammelrechnungs-Parser für {gh_auswahl} folgt — Einlesen noch nicht möglich.")
+elif verarbeiten and uploads:
     alle_zeilen = []
     totals_neu  = {}   # beleg → total_pdf
     pdfs_neu    = {}   # beleg → original PDF-Bytes
@@ -815,7 +950,7 @@ if verarbeiten and uploads:
         fortschritt.progress((i + 1) / len(uploads), text=pdf_file.name)
         try:
             raw = pdf_file.read()
-            df_pdf, total_pdf = parse_pdf(raw, pdf_file.name)
+            df_pdf, total_pdf = _sammel_parser(raw, pdf_file.name)
             beleg = df_pdf["Beleg"].iloc[0] if not df_pdf.empty else beleg_aus_dateiname(pdf_file.name)
             if not df_pdf.empty:
                 alle_zeilen.append(df_pdf)
@@ -870,7 +1005,8 @@ if df_roh is None:
     df_roh = pd.DataFrame(columns=["PZN", "Menge", "EK_ohne_MWSt", "Warenwert", "Beleg", "Jahr", "Monat"])
 totals = st.session_state.get(totals_key) or {}
 pdfs   = st.session_state.get(pdf_key) or {}
-preise = st.session_state.get(preise_key) or {}
+preise = resolve_preise(st.session_state.get("gh_preise_master"),
+                        int(jahr_auswahl), monat_auswahl)
 abr    = st.session_state.get(abr_key) or {}
 
 # Alle bekannten Belege (inkl. solcher ohne erkannte Positionen)
@@ -901,12 +1037,12 @@ else:
         abrpdf_session = st.session_state.get(abrpdf_key) or {}
         report_session = st.session_state.get(report_key) or ""
         speichere_monat_in_drive(
-            drive, df_agg, df_roh, totals, preise, abr_session, report_session,
+            drive, gh_auswahl, df_agg, df_roh, totals, abr_session, report_session,
             int(jahr_auswahl), monat_auswahl
         )
         pdfs_session = st.session_state.get(pdf_key) or {}
-        n_neu  = speichere_pdfs_in_drive(drive, pdfs_session, int(jahr_auswahl), monat_auswahl)
-        n_neu += speichere_abr_pdfs_in_drive(drive, abrpdf_session, int(jahr_auswahl), monat_auswahl)
+        n_neu  = speichere_pdfs_in_drive(drive, gh_auswahl, pdfs_session, int(jahr_auswahl), monat_auswahl)
+        n_neu += speichere_abr_pdfs_in_drive(drive, gh_auswahl, abrpdf_session, int(jahr_auswahl), monat_auswahl)
         return n_neu
 
     def _speichern_mit_feedback(prefix="✓"):
@@ -917,14 +1053,14 @@ else:
         except Exception as e:
             st.error(f"Drive-Fehler: {e}")
 
-    confirm_key = f"gh_confirm_overwrite_{jahr_auswahl}_{monat_auswahl:02d}"
+    confirm_key = f"gh_confirm_overwrite_{_ns}"
 
     if drive:
         _sp_l, _sp_r = st.columns([3, 1])
         with _sp_r:
             if st.button("💾 Aktuellen Stand speichern", use_container_width=True, type="primary"):
                 _report_sichern()   # Textfeld-Wert sichern, bevor evtl. rerun das Widget verwirft
-                if monat_existiert_in_drive(drive, int(jahr_auswahl), monat_auswahl):
+                if monat_existiert_in_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl):
                     st.session_state[confirm_key] = True
                     st.rerun()
                 else:
@@ -1188,7 +1324,7 @@ else:
                 # Bei Bedarf direkt aus Drive nachladen (z. B. nach erneutem Öffnen des Monats)
                 if pdf_bytes is None and drive:
                     with st.spinner("Lade PDF aus Drive …"):
-                        pdf_bytes = lade_pdf_aus_drive(drive, int(jahr_auswahl), monat_auswahl, beleg)
+                        pdf_bytes = lade_pdf_aus_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl, beleg)
                     if pdf_bytes is not None:
                         pdfs[beleg] = pdf_bytes
                         st.session_state[pdf_key] = pdfs
