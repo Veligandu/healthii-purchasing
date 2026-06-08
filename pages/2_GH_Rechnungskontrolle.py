@@ -346,6 +346,28 @@ def lade_pdfs_aus_drive(_drive, jahr, monat):
     return out
 
 
+def lade_pdf_aus_drive(_drive, jahr, monat, beleg):
+    """Lädt ein einzelnes Original-PDF (INVOICE-<beleg>.pdf) aus Drive. None falls fehlend."""
+    from googleapiclient.http import MediaIoBaseDownload
+    try:
+        folder_id = get_pdf_folder_id(_drive, jahr, monat, anlegen=False)
+        if not folder_id:
+            return None
+        name = f"INVOICE-{beleg}.pdf"
+        q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
+        files = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
+        if not files:
+            return None
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=files[0]["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
 def speichere_abr_pdfs_in_drive(_drive, pdfs, jahr, monat):
     """Speichert nur noch nicht abgelegte Monatsabrechnungs-PDFs im Unterordner.
     Gibt die Anzahl neu hochgeladener PDFs zurück."""
@@ -1163,6 +1185,13 @@ else:
                 st.markdown("##### Zugehörige Rechnung (PDF)")
                 pdfs = st.session_state.get(pdf_key) or {}
                 pdf_bytes = pdfs.get(beleg)
+                # Bei Bedarf direkt aus Drive nachladen (z. B. nach erneutem Öffnen des Monats)
+                if pdf_bytes is None and drive:
+                    with st.spinner("Lade PDF aus Drive …"):
+                        pdf_bytes = lade_pdf_aus_drive(drive, int(jahr_auswahl), monat_auswahl, beleg)
+                    if pdf_bytes is not None:
+                        pdfs[beleg] = pdf_bytes
+                        st.session_state[pdf_key] = pdfs
                 if pdf_bytes:
                     if pdf_viewer is not None:
                         pdf_viewer(
@@ -1188,8 +1217,8 @@ else:
                         key=f"dl_pdf_{beleg}",
                     )
                 else:
-                    st.info("Das Original-PDF ist nur in der Sitzung verfügbar, in der es hochgeladen "
-                            "wurde. Lade die Rechnung erneut hoch, um sie hier anzuzeigen.")
+                    st.info("Für diesen Beleg liegt kein PDF in Drive — bitte die Rechnung "
+                            "hochladen und „Aktuellen Stand speichern“.")
 
         else:
             st.info("Noch keine Belege für diesen Monat — links Sammelrechnungen hochladen.")
