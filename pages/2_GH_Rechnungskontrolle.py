@@ -740,14 +740,16 @@ with st.sidebar:
 
     gh_auswahl = st.selectbox("🏢 Großhändler", GROSSHAENDLER, key="gh_haendler")
 
-    st.header("📄 Rechnungen hochladen")
-
     col_m, col_j = st.columns(2)
     monat_auswahl = col_m.selectbox("Monat", list(range(1, 13)),
                                      key="gh_monat",
                                      format_func=lambda m: f"{m:02d}")
     jahr_auswahl  = col_j.number_input("Jahr", min_value=2020, max_value=2099,
                                         step=1, key="gh_jahr")
+    st.caption("Großhändler und Zeitraum gelten für Rechnungen und Monatsabrechnungen.")
+
+    st.divider()
+    st.header("📄 Rechnungen hochladen")
 
     if "gh_upl_nonce" not in st.session_state:
         st.session_state.gh_upl_nonce = 0
@@ -761,37 +763,6 @@ with st.sidebar:
 
     verarbeiten = st.button("▶ Rechnungen einlesen", use_container_width=True, type="primary",
                              disabled=not uploads)
-
-    st.divider()
-
-    # Healthii-EK-Preise: zentrale Master-Liste (gilt für alle GHs/Monate)
-    st.header("💶 Healthii-EK-Preise")
-    st.caption("Zentrale Preisliste — gilt für alle Großhändler. Upload ersetzt die bisherige.")
-    preis_csv = st.file_uploader(
-        "Preisliste (CSV)",
-        type=["csv"],
-        help="CSV mit PZN, Preis und optional valid_from/valid_till. ; oder , als Trenner.",
-        key="preis_csv_master",
-    )
-    if st.button("▶ Preise aktualisieren", use_container_width=True, disabled=not preis_csv):
-        df_raw = parse_preis_csv_raw(preis_csv.read())
-        if not df_raw.empty:
-            st.session_state["gh_preise_master"] = df_raw
-            ok = True
-            if drive:
-                try:
-                    speichere_preise_master(drive, df_raw)
-                except Exception as e:
-                    ok = False
-                    st.error(f"Drive-Fehler beim Speichern der Preise: {e}")
-            if ok:
-                st.success(f"✓ {len(df_raw)} Preiszeilen aktualisiert"
-                           + (" und in Drive gespeichert" if drive else ""))
-        else:
-            st.error("Keine PZN/Preis-Paare erkannt. Spalten prüfen.")
-    _pm = st.session_state.get("gh_preise_master")
-    if _pm is not None and not _pm.empty:
-        st.caption(f"Aktuell {len(_pm)} Preiszeilen in der zentralen Liste.")
 
     st.divider()
 
@@ -836,6 +807,37 @@ with st.sidebar:
             st.session_state[_abr_key]    = {}
             st.session_state[_abrpdf_key] = {}
             st.rerun()
+
+    st.divider()
+
+    # Healthii-EK-Preise: zentrale Master-Liste (gilt für alle GHs/Monate)
+    st.header("💶 Healthii-EK-Preise")
+    st.caption("Zentrale Preisliste — gilt für alle Großhändler. Upload ersetzt die bisherige.")
+    preis_csv = st.file_uploader(
+        "Preisliste (CSV)",
+        type=["csv"],
+        help="CSV mit PZN, Preis und optional valid_from/valid_till. ; oder , als Trenner.",
+        key="preis_csv_master",
+    )
+    if st.button("▶ Preise aktualisieren", use_container_width=True, disabled=not preis_csv):
+        df_raw = parse_preis_csv_raw(preis_csv.read())
+        if not df_raw.empty:
+            st.session_state["gh_preise_master"] = df_raw
+            ok = True
+            if drive:
+                try:
+                    speichere_preise_master(drive, df_raw)
+                except Exception as e:
+                    ok = False
+                    st.error(f"Drive-Fehler beim Speichern der Preise: {e}")
+            if ok:
+                st.success(f"✓ {len(df_raw)} Preiszeilen aktualisiert"
+                           + (" und in Drive gespeichert" if drive else ""))
+        else:
+            st.error("Keine PZN/Preis-Paare erkannt. Spalten prüfen.")
+    _pm = st.session_state.get("gh_preise_master")
+    if _pm is not None and not _pm.empty:
+        st.caption(f"Aktuell {len(_pm)} Preiszeilen in der zentralen Liste.")
 
     st.divider()
 
