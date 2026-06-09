@@ -202,7 +202,7 @@ def lade_monat_aus_drive(_drive, gh, jahr, monat):
         res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
         files = res.get("files", [])
         if not files:
-            return None, {}, {}, "", False, "", {}
+            return None, {}, {}, "", False, "", {}, []
         buf = io.BytesIO()
         dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=files[0]["id"]))
         done = False
@@ -234,18 +234,20 @@ def lade_monat_aus_drive(_drive, gh, jahr, monat):
                 report = "" if pd.isna(v) else str(v)
         gesperrt = False
         gesperrt_am = ""
+        ausgeschlossen = []
         if "Meta" in xls.sheet_names:
             df_meta = pd.read_excel(xls, "Meta")
-            mm = dict(zip(df_meta.iloc[:, 0].astype(str), df_meta.iloc[:, 1]))
+            mm = dict(zip(df_meta.iloc[:, 0].astype(str), df_meta.iloc[:, 1].astype(str)))
             gesperrt = str(mm.get("gesperrt", "")).strip().lower() in ("true", "1", "ja")
             gesperrt_am = str(mm.get("gesperrt_am", "") or "")
+            ausgeschlossen = [b.strip() for b in str(mm.get("ausgeschlossen", "") or "").split(",") if b.strip()]
         snapshot = {}
         if "PreiseSnapshot" in xls.sheet_names:
             df_s = pd.read_excel(xls, "PreiseSnapshot", dtype={"PZN": str})
             snapshot = dict(zip(df_s["PZN"].astype(str), df_s["Preis"]))
-        return df_roh, totals, abr, report, gesperrt, gesperrt_am, snapshot
+        return df_roh, totals, abr, report, gesperrt, gesperrt_am, snapshot, ausgeschlossen
     except Exception:
-        return None, {}, {}, "", False, "", {}
+        return None, {}, {}, "", False, "", {}, []
 
 
 def monat_existiert_in_drive(_drive, gh, jahr, monat):
@@ -261,7 +263,8 @@ def monat_existiert_in_drive(_drive, gh, jahr, monat):
 
 
 def speichere_monat_in_drive(_drive, gh, df_agg, df_roh, totals, abr, report,
-                             jahr, monat, gesperrt=False, gesperrt_am="", snapshot=None):
+                             jahr, monat, gesperrt=False, gesperrt_am="", snapshot=None,
+                             ausgeschlossen=None):
     """Speichert Monatstabelle + Rohdaten + Summen + Abrechnung + Report + Sperre/Snapshot."""
     from googleapiclient.http import MediaIoBaseUpload
     folder_id = get_gh_subfolder_id(_drive, gh)
@@ -273,8 +276,9 @@ def speichere_monat_in_drive(_drive, gh, df_agg, df_roh, totals, abr, report,
         [{"Rechnungsnr": n, "Datum": _abr_norm(v)[0], "Betrag": _abr_norm(v)[1]}
          for n, v in (abr or {}).items()]
     )
-    df_meta = pd.DataFrame({"Schluessel": ["gesperrt", "gesperrt_am"],
-                            "Wert": [str(bool(gesperrt)), str(gesperrt_am or "")]})
+    df_meta = pd.DataFrame({"Schluessel": ["gesperrt", "gesperrt_am", "ausgeschlossen"],
+                            "Wert": [str(bool(gesperrt)), str(gesperrt_am or ""),
+                                     ",".join(str(b) for b in (ausgeschlossen or []))]})
     df_snap = pd.DataFrame(
         [{"PZN": p, "Preis": v} for p, v in (snapshot or {}).items()]
     )
@@ -984,25 +988,39 @@ with st.sidebar:
         help="CSV mit PZN, Preis und optional valid_from/valid_till. ; oder , als Trenner.",
         key="preis_csv_master",
     )
+    st.caption("Upload ersetzt nur die enthaltenen Quellen (PHX/GWC/AHD); andere bleiben erhalten.")
     if st.button("▶ Preise aktualisieren", use_container_width=True, disabled=not preis_csv):
-        df_raw = parse_preis_csv_raw(preis_csv.read())
-        if not df_raw.empty:
-            st.session_state["gh_preise_master"] = df_raw
+        df_neu = parse_preis_csv_raw(preis_csv.read())
+        if not df_neu.empty:
+            # Merge je source: vorhandene Quellen, die im Upload sind, ersetzen
+            df_alt = st.session_state.get("gh_preise_master")
+            src_neu = set(df_neu["source"].astype(str).str.upper().unique())
+            if df_alt is not None and not df_alt.empty and "source" in df_alt.columns:
+                df_alt = df_alt[~df_alt["source"].astype(str).str.upper().isin(src_neu)]
+                df_master = pd.concat([df_alt, df_neu], ignore_index=True)
+            else:
+                df_master = df_neu
+            st.session_state["gh_preise_master"] = df_master
             ok = True
             if drive:
                 try:
-                    speichere_preise_master(drive, df_raw)
+                    speichere_preise_master(drive, df_master)
                 except Exception as e:
                     ok = False
                     st.error(f"Drive-Fehler beim Speichern der Preise: {e}")
             if ok:
-                st.success(f"✓ {len(df_raw)} Preiszeilen aktualisiert"
-                           + (" und in Drive gespeichert" if drive else ""))
+                _vc = df_neu["source"].astype(str).str.upper().value_counts().to_dict()
+                st.success(f"✓ Aktualisiert: { {k:int(v) for k,v in _vc.items()} }"
+                           + (" · in Drive gespeichert" if drive else ""))
         else:
             st.error("Keine PZN/Preis-Paare erkannt. Spalten prüfen.")
     _pm = st.session_state.get("gh_preise_master")
     if _pm is not None and not _pm.empty:
-        st.caption(f"Aktuell {len(_pm)} Preiszeilen in der zentralen Liste.")
+        if "source" in _pm.columns:
+            _vc = _pm["source"].astype(str).str.upper().value_counts().to_dict()
+            st.caption("Master-Liste: " + " · ".join(f"{k} {int(v)}" for k, v in _vc.items()))
+        else:
+            st.caption(f"Aktuell {len(_pm)} Preiszeilen in der zentralen Liste.")
 
     st.divider()
 
@@ -1057,12 +1075,15 @@ rep_wkey   = f"report_input_{_ns}" # Widget-Key des Textfelds
 lock_key   = f"gh_locked_{_ns}"   # bool: Monat gesperrt
 lockam_key = f"gh_lockedat_{_ns}" # Zeitstempel der Sperre
 snap_key   = f"gh_snapshot_{_ns}" # eingefrorene Preise (PZN → Preis)
+excl_key   = f"gh_excluded_{_ns}" # von Kalkulation ausgeschlossene Belege (set)
 
 for k in [roh_key, totals_key, agg_key, pdf_key, abr_key, abrpdf_key]:
     if k not in st.session_state:
         st.session_state[k] = None
 if report_key not in st.session_state:
     st.session_state[report_key] = ""
+if excl_key not in st.session_state:
+    st.session_state[excl_key] = set()
 
 
 def _report_sichern():
@@ -1076,7 +1097,7 @@ load_flag = f"gh_loaded_{_ns}"
 if drive and st.session_state[roh_key] is None and not st.session_state.get(load_flag):
     if monat_existiert_in_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl):
         (df_roh_drive, totals_drive, abr_drive, report_drive,
-         gesperrt_drive, gesperrtam_drive, snap_drive) = lade_monat_aus_drive(
+         gesperrt_drive, gesperrtam_drive, snap_drive, excl_drive) = lade_monat_aus_drive(
             drive, gh_auswahl, int(jahr_auswahl), monat_auswahl
         )
         st.session_state[roh_key] = (
@@ -1089,6 +1110,7 @@ if drive and st.session_state[roh_key] is None and not st.session_state.get(load
         st.session_state[lock_key]   = gesperrt_drive
         st.session_state[lockam_key] = gesperrtam_drive
         st.session_state[snap_key]   = snap_drive
+        st.session_state[excl_key]   = set(excl_drive or [])
         st.session_state[pdf_key]    = lade_pdfs_aus_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl)
         st.session_state[abrpdf_key] = lade_abr_pdfs_aus_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl)
     st.session_state[load_flag] = True
@@ -1196,9 +1218,11 @@ if not belege_alle and not abr:
         </div>
     </div>""", unsafe_allow_html=True)
 else:
-    # Aggregierte Monatstabelle (auch fürs Speichern benötigt)
+    ausgeschlossen = set(st.session_state.get(excl_key) or set())
+    # Aggregierte Monatstabelle: ausgeschlossene Belege werden ignoriert
+    df_roh_kalk = df_roh[~df_roh["Beleg"].astype(str).isin(ausgeschlossen)]
     df_agg = (
-        df_roh
+        df_roh_kalk
         .groupby("PZN", as_index=False)
         .agg(Menge=("Menge", "sum"), Warenwert=("Warenwert", "sum"))
         .sort_values("Warenwert", ascending=False)
@@ -1217,6 +1241,7 @@ else:
             gesperrt=bool(st.session_state.get(lock_key)),
             gesperrt_am=st.session_state.get(lockam_key, ""),
             snapshot=st.session_state.get(snap_key) or {},
+            ausgeschlossen=sorted(st.session_state.get(excl_key) or set()),
         )
         pdfs_session = st.session_state.get(pdf_key) or {}
         n_neu  = speichere_pdfs_in_drive(drive, gh_auswahl, pdfs_session, int(jahr_auswahl), monat_auswahl)
@@ -1408,6 +1433,8 @@ else:
             ).round(2)
 
             def _status(r):
+                if str(r["Beleg"]) in ausgeschlossen:
+                    return "🔒 Gesperrt"
                 if r["Positionen"] == 0:
                     return "❌ Keine Positionen"
                 d = r["Differenz"]
@@ -1422,12 +1449,14 @@ else:
             n_ok   = int((df_belege["Status"] == "✅").sum())
             n_abw  = int((df_belege["Status"] == "⚠️ Abweichung").sum())
             n_leer = int((df_belege["Positionen"] == 0).sum())
-            c1, c2, c3, c4, c5 = st.columns(5)
+            n_excl = len(ausgeschlossen)
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
             c1.metric("Belege", len(df_belege))
             c2.metric("✅ OK", n_ok)
             c3.metric("⚠️ Abweichungen", n_abw)
             c4.metric("❌ Keine Pos.", n_leer)
-            c5.metric("Gesamtwert", f"{df_belege['Warenwert_berechnet'].sum():,.2f} €")
+            c5.metric("🔒 Gesperrt", n_excl)
+            c6.metric("Gesamtwert (kalk.)", f"{df_agg['Warenwert'].sum():,.2f} €")
 
             st.divider()
 
@@ -1480,9 +1509,26 @@ else:
                 diff      = zeile["Differenz"]
                 beleg_wert = zeile["Warenwert_Beleg"]
                 ist_ok    = zeile["Status"] == "✅"
+                ist_excl  = str(beleg) in ausgeschlossen
 
                 st.divider()
-                st.subheader(f"{'✅' if ist_ok else '⚠️'} Beleg {beleg} korrigieren")
+                st.subheader(f"{'🔒' if ist_excl else ('✅' if ist_ok else '⚠️')} Beleg {beleg} korrigieren")
+
+                # Beleg von der Monatstabellen-Kalkulation aus-/einschließen
+                _excl_l, _excl_r = st.columns([3, 1])
+                with _excl_r:
+                    if ist_excl:
+                        if st.button("🔓 In Kalkulation aufnehmen", use_container_width=True,
+                                     key=f"incl_{beleg}", disabled=gesperrt):
+                            st.session_state[excl_key].discard(str(beleg))
+                            st.rerun()
+                    else:
+                        if st.button("🔒 Aus Kalkulation ausschließen", use_container_width=True,
+                                     key=f"excl_{beleg}", disabled=gesperrt):
+                            st.session_state[excl_key].add(str(beleg))
+                            st.rerun()
+                if ist_excl:
+                    st.info("Dieser Beleg ist von der Monatstabellen-Kalkulation ausgeschlossen.")
 
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Berechnet", f"{zeile['Warenwert_berechnet']:,.2f} €")
