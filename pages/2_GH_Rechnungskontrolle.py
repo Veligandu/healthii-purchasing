@@ -155,6 +155,8 @@ drive = st.session_state.gh_drive
 
 GH_FOLDER_NAME = "GH-Rechnungen"
 GROSSHAENDLER  = ["Phoenix", "Gehe", "Alliance"]   # unterstützte Großhändler
+# Mapping Großhändler → source-Code in der Preis-Masterliste (HEAL wird ignoriert)
+GH_SOURCE = {"Phoenix": "PHX", "Gehe": "GWC", "Alliance": "AHD"}
 
 @st.cache_data(ttl=120, show_spinner=False)
 def get_gh_folder_id(_drive):
@@ -583,9 +585,9 @@ def _preis_zu_float(raw: str):
 
 def parse_preis_csv_raw(datei_bytes: bytes) -> pd.DataFrame:
     """Liest die Preis-CSV in eine normierte Rohtabelle:
-    Spalten PZN (8-stellig), Preis (float), valid_from (ISO|''), valid_till (ISO|'').
+    Spalten PZN (8-stellig), Preis (float), source (GH-Code), valid_from, valid_till.
     Erkennt ; oder , als Trenner und deutsches/englisches Dezimalformat."""
-    leer = pd.DataFrame(columns=["PZN", "Preis", "valid_from", "valid_till"])
+    leer = pd.DataFrame(columns=["PZN", "Preis", "source", "valid_from", "valid_till"])
     text = None
     for enc in ("utf-8-sig", "utf-8", "latin-1"):
         try:
@@ -616,6 +618,7 @@ def parse_preis_csv_raw(datei_bytes: bytes) -> pd.DataFrame:
         preis_col = rest[-1] if rest else None
     if preis_col is None:
         return leer
+    src_col  = _find("source", "quelle", "lieferant", exclude=pzn_col)
     from_col = _find("valid_from", "gueltig_von", "von", exclude=pzn_col)
     till_col = _find("valid_till", "valid_to", "gueltig_bis", "bis", exclude=pzn_col)
 
@@ -632,21 +635,26 @@ def parse_preis_csv_raw(datei_bytes: bytes) -> pd.DataFrame:
         zeilen.append({
             "PZN":        pzn.zfill(8),
             "Preis":      preis,
+            "source":     (str(row[src_col]).strip().upper() if src_col else ""),
             "valid_from": vf.date().isoformat() if pd.notna(vf) else "",
             "valid_till": vt.date().isoformat() if pd.notna(vt) else "",
         })
-    return pd.DataFrame(zeilen, columns=["PZN", "Preis", "valid_from", "valid_till"])
+    return pd.DataFrame(zeilen, columns=["PZN", "Preis", "source", "valid_from", "valid_till"])
 
 
-def resolve_preise(df_raw, jahr: int, monat: int) -> dict:
-    """Löst aus der Preis-Rohtabelle die im Monat gültigen Preise auf.
-    Gibt {PZN(str): preis(float)}; je PZN der Eintrag mit jüngstem valid_from."""
+def resolve_preise(df_raw, jahr: int, monat: int, source=None) -> dict:
+    """Löst aus der Preis-Rohtabelle die im Monat gültigen Preise des angegebenen
+    GH (source-Code) auf. Gibt {PZN(str): preis(float)}; je PZN jüngster valid_from."""
     if df_raw is None or df_raw.empty:
         return {}
+    hat_source = "source" in df_raw.columns
+    src = (source or "").strip().upper()
     monatsstart = pd.Timestamp(year=int(jahr), month=int(monat), day=1)
     monatsende  = monatsstart + pd.offsets.MonthEnd(0)
     best = {}   # pzn → (valid_from_ts, preis)
     for _, row in df_raw.iterrows():
+        if hat_source and src and str(row.get("source", "")).strip().upper() != src:
+            continue
         pzn = str(row["PZN"]).zfill(8)
         try:
             preis = float(row["Preis"])
@@ -1172,7 +1180,8 @@ if gesperrt:
     preise = st.session_state.get(snap_key) or {}
 else:
     preise = resolve_preise(st.session_state.get("gh_preise_master"),
-                            int(jahr_auswahl), monat_auswahl)
+                            int(jahr_auswahl), monat_auswahl,
+                            source=GH_SOURCE.get(gh_auswahl))
 abr    = st.session_state.get(abr_key) or {}
 
 # Alle bekannten Belege (inkl. solcher ohne erkannte Positionen)
