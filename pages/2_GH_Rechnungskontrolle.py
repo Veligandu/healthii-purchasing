@@ -899,15 +899,6 @@ with st.sidebar:
         except Exception:
             pass
 
-        # Einmalige Migration der Alt-Phoenix-Daten in den Unterordner
-        with st.expander("⚙️ Wartung"):
-            if st.button("Phoenix-Daten in Unterordner migrieren", use_container_width=True):
-                try:
-                    n = migriere_phoenix_in_unterordner(drive)
-                    st.cache_data.clear()
-                    st.success(f"✓ {n} Einträge nach 'Phoenix/' verschoben.")
-                except Exception as e:
-                    st.error(f"Migration fehlgeschlagen: {e}")
 
 # ─── Haupt-Bereich ────────────────────────────────────────────────────────────
 
