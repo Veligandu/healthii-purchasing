@@ -788,6 +788,47 @@ def parse_gehe_abr(datei_bytes: bytes) -> dict:
     return out
 
 
+# Gehe-Sammelrechnung (Lieferschein): Menge … PZN … [AVP] AEP Wert
+_GEHE_POS_RE   = re.compile(r"^\s*(\d+)\s+.*?\b(\d{8})\b\s+.*?([\d.]+,\d{2})F?\s+([\d.]+,\d{2})\s*$")
+_GEHE_HEAD_RE  = re.compile(r"LIEFERSCHEIN\s+[\d.]+\s+(\d+)\s+(\d{2})\.(\d{2})\.(\d{4})")
+_GEHE_TOTAL_RE = re.compile(r"Gesamtsumme\s+EUR\s+.*?([\d.]+,\d{2})\s*$")
+
+def parse_gehe_sammel(datei_bytes: bytes, dateiname: str) -> tuple[pd.DataFrame, float | None]:
+    """Gehe-/Alliance-Sammelrechnung (Lieferschein). Gibt (Positionen, Gesamtsumme)."""
+    with pdfplumber.open(io.BytesIO(datei_bytes)) as pdf:
+        text = "\n".join(seite.extract_text() or "" for seite in pdf.pages)
+
+    mh = _GEHE_HEAD_RE.search(text)
+    if mh:
+        beleg = mh.group(1)
+        monat, jahr = int(mh.group(3)), int(mh.group(4))
+    else:
+        beleg = os.path.splitext(os.path.basename(dateiname))[0]
+        jahr, monat, _ = datum_aus_dateiname(dateiname)
+
+    total_pdf = None
+    zeilen = []
+    for ln in text.splitlines():
+        mt = _GEHE_TOTAL_RE.search(ln)
+        if mt:
+            total_pdf = _preis_zu_float(mt.group(1))
+        m = _GEHE_POS_RE.match(ln)
+        if not m:
+            continue
+        ek   = _preis_zu_float(m.group(3))
+        wert = _preis_zu_float(m.group(4))
+        zeilen.append({
+            "PZN":          m.group(2),
+            "Menge":        int(m.group(1)),
+            "EK_ohne_MWSt": ek if ek is not None else 0.0,
+            "Warenwert":    wert if wert is not None else 0.0,
+            "Beleg":        beleg,
+            "Jahr":         jahr,
+            "Monat":        monat,
+        })
+    return pd.DataFrame(zeilen), total_pdf
+
+
 # ─── Parser-Registry pro Großhändler ──────────────────────────────────────────
 # "sammel":     fn(datei_bytes, dateiname) -> (DataFrame[PZN,Menge,EK_ohne_MWSt,Warenwert,
 #                                              Beleg,Jahr,Monat], rechnungssumme|None)
@@ -795,8 +836,8 @@ def parse_gehe_abr(datei_bytes: bytes) -> dict:
 # None = Parser noch nicht implementiert.
 PARSER = {
     "Phoenix":  {"sammel": parse_phoenix_sammel, "abrechnung": parse_phoenix_abr},
-    "Gehe":     {"sammel": None,                 "abrechnung": parse_gehe_abr},
-    "Alliance": {"sammel": None,                 "abrechnung": parse_gehe_abr},
+    "Gehe":     {"sammel": parse_gehe_sammel,    "abrechnung": parse_gehe_abr},
+    "Alliance": {"sammel": parse_gehe_sammel,    "abrechnung": parse_gehe_abr},
 }
 
 # ─── Header ───────────────────────────────────────────────────────────────────
