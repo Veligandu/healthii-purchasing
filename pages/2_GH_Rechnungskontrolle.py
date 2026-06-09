@@ -648,32 +648,54 @@ def parse_preis_csv_raw(datei_bytes: bytes) -> pd.DataFrame:
 
 def resolve_preise(df_raw, jahr: int, monat: int, source=None) -> dict:
     """Löst aus der Preis-Rohtabelle die im Monat gültigen Preise des angegebenen
-    GH (source-Code) auf. Gibt {PZN(str): preis(float)}; je PZN jüngster valid_from."""
-    if df_raw is None or df_raw.empty:
+    GH (source-Code) auf. Gibt {PZN(str): preis(float)}; je PZN jüngster valid_from.
+    Vollständig vektorisiert (keine Zeilen-Schleife)."""
+    if df_raw is None or len(df_raw) == 0:
         return {}
-    hat_source = "source" in df_raw.columns
-    src = (source or "").strip().upper()
+    df = df_raw
+    if "source" in df.columns and source:
+        df = df[df["source"].astype(str).str.upper() == str(source).strip().upper()]
+    if df.empty:
+        return {}
+
     monatsstart = pd.Timestamp(year=int(jahr), month=int(monat), day=1)
     monatsende  = monatsstart + pd.offsets.MonthEnd(0)
-    best = {}   # pzn → (valid_from_ts, preis)
-    for _, row in df_raw.iterrows():
-        if hat_source and src and str(row.get("source", "")).strip().upper() != src:
-            continue
-        pzn = str(row["PZN"]).zfill(8)
-        try:
-            preis = float(row["Preis"])
-        except (ValueError, TypeError):
-            continue
-        vf = pd.to_datetime(row.get("valid_from"), errors="coerce")
-        vt = pd.to_datetime(row.get("valid_till"), errors="coerce")
-        if pd.notna(vf) and vf > monatsende:
-            continue
-        if pd.notna(vt) and vt < monatsstart:
-            continue
-        rank = vf if pd.notna(vf) else pd.Timestamp.min
-        if pzn not in best or rank >= best[pzn][0]:
-            best[pzn] = (rank, preis)
-    return {pzn: preis for pzn, (_, preis) in best.items()}
+    vf = pd.to_datetime(df["valid_from"], errors="coerce")
+    vt = pd.to_datetime(df["valid_till"], errors="coerce")
+    mask = (vf.isna() | (vf <= monatsende)) & (vt.isna() | (vt >= monatsstart))
+    if not mask.any():
+        return {}
+
+    sub = pd.DataFrame({
+        "PZN":   df["PZN"].astype(str).str.zfill(8)[mask].values,
+        "Preis": pd.to_numeric(df["Preis"], errors="coerce")[mask].values,
+        "_vf":   vf[mask].values,
+    }).dropna(subset=["Preis"])
+    if sub.empty:
+        return {}
+    # je PZN den jüngsten valid_from (NaT als ältestmöglich behandeln)
+    sub = sub.sort_values("_vf", na_position="first").drop_duplicates("PZN", keep="last")
+    return dict(zip(sub["PZN"], sub["Preis"].astype(float)))
+
+
+def _master_setzen(df):
+    """Setzt die Master-Preisliste neu, erhöht die Version und leert den Preis-Cache."""
+    st.session_state["gh_preise_master"]  = df
+    st.session_state["gh_preise_version"] = st.session_state.get("gh_preise_version", 0) + 1
+    st.session_state["gh_preise_cache"]   = {}
+
+
+def get_preise(jahr, monat, source) -> dict:
+    """Gecachter Zugriff auf die aufgelösten Preise (je Master-Version, GH-source, Monat)."""
+    master = st.session_state.get("gh_preise_master")
+    if master is None or len(master) == 0:
+        return {}
+    ver   = st.session_state.get("gh_preise_version", 0)
+    cache = st.session_state.setdefault("gh_preise_cache", {})
+    key   = (ver, (str(source).upper() if source else ""), int(jahr), int(monat))
+    if key not in cache:
+        cache[key] = resolve_preise(master, jahr, monat, source)
+    return cache[key]
 
 # ─── Monatsabrechnung-Parser (GH) ─────────────────────────────────────────────
 
@@ -884,7 +906,7 @@ st.markdown(f"""
 
 # Zentrale Preisliste einmalig je Sitzung laden
 if drive and "gh_preise_master" not in st.session_state:
-    st.session_state["gh_preise_master"] = lade_preise_master(drive)
+    _master_setzen(lade_preise_master(drive))
 
 with st.sidebar:
     heute = date.today()
@@ -1000,7 +1022,7 @@ with st.sidebar:
                 df_master = pd.concat([df_alt, df_neu], ignore_index=True)
             else:
                 df_master = df_neu
-            st.session_state["gh_preise_master"] = df_master
+            _master_setzen(df_master)
             ok = True
             if drive:
                 try:
@@ -1201,9 +1223,7 @@ if gesperrt:
     # eingefrorene Preise verwenden (neue Master-Uploads wirken nicht)
     preise = st.session_state.get(snap_key) or {}
 else:
-    preise = resolve_preise(st.session_state.get("gh_preise_master"),
-                            int(jahr_auswahl), monat_auswahl,
-                            source=GH_SOURCE.get(gh_auswahl))
+    preise = get_preise(int(jahr_auswahl), monat_auswahl, GH_SOURCE.get(gh_auswahl))
 abr    = st.session_state.get(abr_key) or {}
 
 # Alle bekannten Belege (inkl. solcher ohne erkannte Positionen)
