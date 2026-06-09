@@ -697,6 +697,97 @@ def _abr_norm(v):
     return None, v
 
 
+# ─── Gehe-Parser (CID-Text aus Vektor-PDF, kein OCR) ──────────────────────────
+
+def _cid_tounicode(font):
+    """Baut aus dem ToUnicode-CMap eines Fonts eine CID→Zeichen-Map."""
+    from pdfminer.pdftypes import resolve1
+    tu = resolve1(font.get("ToUnicode"))
+    if tu is None:
+        return {}
+    data = tu.get_data().decode("latin-1", "replace")
+    m = {}
+    for a, b in re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>",
+                           "".join(re.findall(r"beginbfchar(.*?)endbfchar", data, re.S))):
+        m[int(a, 16)] = chr(int(b[:4], 16))
+    for lo, hi, dst in re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>",
+                                  "".join(re.findall(r"beginbfrange(.*?)endbfrange", data, re.S))):
+        lo, hi, dst = int(lo, 16), int(hi, 16), int(dst[:4], 16)
+        for i in range(hi - lo + 1):
+            m[lo + i] = chr(dst + i)
+    return m
+
+
+def pdf_cid_lines(datei_bytes: bytes) -> list[str]:
+    """Liest CID-kodierten Vektortext (auch in /Artifact-Markierungen) und rekonstruiert
+    Zeilen anhand der Text-Positionen. Für PDFs, die pdfplumber leer liefert (z. B. Gehe)."""
+    from pdfminer.pdfparser import PDFParser
+    from pdfminer.pdfdocument import PDFDocument
+    from pdfminer.pdfpage import PDFPage
+    from pdfminer.pdftypes import resolve1
+    out = []
+    doc = PDFDocument(PDFParser(io.BytesIO(datei_bytes)))
+    for page in PDFPage.create_pages(doc):
+        res = resolve1(page.resources or {})
+        fonts = resolve1(res.get("Font") or {})
+        maps = {k: _cid_tounicode(resolve1(v)) for k, v in fonts.items()}
+        cont = page.contents
+        streams = cont if isinstance(cont, list) else [cont]
+        s = b"".join(resolve1(c).get_data() for c in streams).decode("latin-1", "replace")
+        items = []
+        curfont = None
+        for blk in re.split(r"BT", s):
+            mf = re.search(r"/(F\d+)\s+[\d.]+\s+Tf", blk)
+            if mf:
+                curfont = mf.group(1)
+            mtd = re.search(r"(-?\d+)\s+(-?\d+)\s+Td", blk)
+            if not mtd:
+                continue
+            x, y = int(mtd.group(1)), int(mtd.group(2))
+            for mtj in re.finditer(r"<([0-9A-Fa-f]+)>\s*Tj", blk):
+                h = mtj.group(1)
+                cids = [int(h[i:i+4], 16) for i in range(0, len(h), 4)]
+                txt = "".join(maps.get(curfont, {}).get(c, "") for c in cids)
+                if txt:
+                    items.append((y, x, txt))
+        items.sort(key=lambda t: (-t[0], t[1]))
+        cur_y = None
+        cur = []
+        for y, x, txt in items:
+            if cur_y is None or abs(y - cur_y) > 30:
+                if cur:
+                    out.append("  ".join(t for _, t in sorted(cur)))
+                cur = []
+                cur_y = y
+            cur.append((x, txt))
+        if cur:
+            out.append("  ".join(t for _, t in sorted(cur)))
+    return out
+
+
+# Gehe-Abrechnungszeile: Auftrag  Beleg-Nr(6)  Lieferdatum  [Umsatz 7%]  [19%]  Gesamt
+_GEHE_ABR_RE = re.compile(
+    r"^\s*\S+\s+(\d{6})\s+(\d{2}\.\d{2}\.\d{2})\s+.*?([\d.]+,\d{2})\s*$"
+)
+
+def parse_gehe_abr(datei_bytes: bytes) -> dict:
+    """Liest aus einer Gehe-/Alliance-Monatsabrechnung Beleg-Nr → {datum, betrag}."""
+    out = {}
+    for ln in pdf_cid_lines(datei_bytes):
+        m = _GEHE_ABR_RE.match(ln.replace("\xa0", " ").strip())
+        if not m:
+            continue
+        betrag = _preis_zu_float(m.group(3))
+        if betrag is None:
+            continue
+        try:
+            datum = pd.to_datetime(m.group(2), format="%d.%m.%y").date().isoformat()
+        except Exception:
+            datum = None
+        out[m.group(1)] = {"datum": datum, "betrag": betrag}
+    return out
+
+
 # ─── Parser-Registry pro Großhändler ──────────────────────────────────────────
 # "sammel":     fn(datei_bytes, dateiname) -> (DataFrame[PZN,Menge,EK_ohne_MWSt,Warenwert,
 #                                              Beleg,Jahr,Monat], rechnungssumme|None)
@@ -704,8 +795,8 @@ def _abr_norm(v):
 # None = Parser noch nicht implementiert.
 PARSER = {
     "Phoenix":  {"sammel": parse_phoenix_sammel, "abrechnung": parse_phoenix_abr},
-    "Gehe":     {"sammel": None,                 "abrechnung": None},
-    "Alliance": {"sammel": None,                 "abrechnung": None},
+    "Gehe":     {"sammel": None,                 "abrechnung": parse_gehe_abr},
+    "Alliance": {"sammel": None,                 "abrechnung": parse_gehe_abr},
 }
 
 # ─── Header ───────────────────────────────────────────────────────────────────
