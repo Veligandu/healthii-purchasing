@@ -789,7 +789,7 @@ def parse_gehe_abr(datei_bytes: bytes) -> dict:
 
 
 # Gehe-Sammelrechnung (Lieferschein): Menge … PZN … [AVP] AEP Wert
-_GEHE_POS_RE   = re.compile(r"^\s*(\d+)\s+.*?\b(\d{8})\b\s+.*?([\d.]+,\d{2})F?\s+([\d.]+,\d{2})\s*$")
+_GEHE_POS_RE   = re.compile(r"^\s*(\d+)\s+.*?\b(\d{8})\b\s+.*?([\d.]+,\d{2})[A-Z]?\s+([\d.]+,\d{2})\s*$")
 _GEHE_HEAD_RE  = re.compile(r"LIEFERSCHEIN\s+[\d.]+\s+(\d+)\s+(\d{2})\.(\d{2})\.(\d{4})")
 _GEHE_TOTAL_RE = re.compile(r"Gesamtsumme\s+EUR\s+.*?([\d.]+,\d{2})\s*$")
 
