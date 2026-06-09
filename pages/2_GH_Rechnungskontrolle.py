@@ -200,7 +200,7 @@ def lade_monat_aus_drive(_drive, gh, jahr, monat):
         res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
         files = res.get("files", [])
         if not files:
-            return None, {}, {}, ""
+            return None, {}, {}, "", False, "", {}
         buf = io.BytesIO()
         dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=files[0]["id"]))
         done = False
@@ -230,9 +230,20 @@ def lade_monat_aus_drive(_drive, gh, jahr, monat):
             if not df_rep.empty and "Report" in df_rep.columns:
                 v = df_rep["Report"].iloc[0]
                 report = "" if pd.isna(v) else str(v)
-        return df_roh, totals, abr, report
+        gesperrt = False
+        gesperrt_am = ""
+        if "Meta" in xls.sheet_names:
+            df_meta = pd.read_excel(xls, "Meta")
+            mm = dict(zip(df_meta.iloc[:, 0].astype(str), df_meta.iloc[:, 1]))
+            gesperrt = str(mm.get("gesperrt", "")).strip().lower() in ("true", "1", "ja")
+            gesperrt_am = str(mm.get("gesperrt_am", "") or "")
+        snapshot = {}
+        if "PreiseSnapshot" in xls.sheet_names:
+            df_s = pd.read_excel(xls, "PreiseSnapshot", dtype={"PZN": str})
+            snapshot = dict(zip(df_s["PZN"].astype(str), df_s["Preis"]))
+        return df_roh, totals, abr, report, gesperrt, gesperrt_am, snapshot
     except Exception:
-        return None, {}, {}, ""
+        return None, {}, {}, "", False, "", {}
 
 
 def monat_existiert_in_drive(_drive, gh, jahr, monat):
@@ -247,8 +258,9 @@ def monat_existiert_in_drive(_drive, gh, jahr, monat):
         return False
 
 
-def speichere_monat_in_drive(_drive, gh, df_agg, df_roh, totals, abr, report, jahr, monat):
-    """Speichert Monatstabelle + Rohdaten + Summen + Abrechnung + Report als Excel (pro GH)."""
+def speichere_monat_in_drive(_drive, gh, df_agg, df_roh, totals, abr, report,
+                             jahr, monat, gesperrt=False, gesperrt_am="", snapshot=None):
+    """Speichert Monatstabelle + Rohdaten + Summen + Abrechnung + Report + Sperre/Snapshot."""
     from googleapiclient.http import MediaIoBaseUpload
     folder_id = get_gh_subfolder_id(_drive, gh)
     name = f"gh_rechnung_{jahr}_{monat:02d}.xlsx"
@@ -258,6 +270,11 @@ def speichere_monat_in_drive(_drive, gh, df_agg, df_roh, totals, abr, report, ja
     df_abr = pd.DataFrame(
         [{"Rechnungsnr": n, "Datum": _abr_norm(v)[0], "Betrag": _abr_norm(v)[1]}
          for n, v in (abr or {}).items()]
+    )
+    df_meta = pd.DataFrame({"Schluessel": ["gesperrt", "gesperrt_am"],
+                            "Wert": [str(bool(gesperrt)), str(gesperrt_am or "")]})
+    df_snap = pd.DataFrame(
+        [{"PZN": p, "Preis": v} for p, v in (snapshot or {}).items()]
     )
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
@@ -270,6 +287,9 @@ def speichere_monat_in_drive(_drive, gh, df_agg, df_roh, totals, abr, report, ja
             df_abr.to_excel(w, index=False, sheet_name="Abrechnung")
         if report:
             pd.DataFrame({"Report": [report]}).to_excel(w, index=False, sheet_name="Report")
+        df_meta.to_excel(w, index=False, sheet_name="Meta")
+        if not df_snap.empty:
+            df_snap.to_excel(w, index=False, sheet_name="PreiseSnapshot")
     buf.seek(0)
     media = MediaIoBaseUpload(
         buf,
@@ -748,6 +768,11 @@ with st.sidebar:
                                         step=1, key="gh_jahr")
     st.caption("Großhändler und Zeitraum gelten für Rechnungen und Monatsabrechnungen.")
 
+    _gesperrt_sb = bool(st.session_state.get(
+        f"gh_locked_{gh_auswahl}_{jahr_auswahl}_{monat_auswahl:02d}"))
+    if _gesperrt_sb:
+        st.info("🔒 Dieser Monat ist gesperrt — Uploads deaktiviert.")
+
     st.divider()
     st.header("📄 Rechnungen hochladen")
 
@@ -762,7 +787,7 @@ with st.sidebar:
     )
 
     verarbeiten = st.button("▶ Rechnungen einlesen", use_container_width=True, type="primary",
-                             disabled=not uploads)
+                             disabled=not uploads or _gesperrt_sb)
 
     st.divider()
 
@@ -779,7 +804,7 @@ with st.sidebar:
     )
     _abr_parser = PARSER.get(gh_auswahl, {}).get("abrechnung")
     if st.button("▶ Abrechnungen einlesen", use_container_width=True,
-                 disabled=not abr_uploads or _abr_parser is None):
+                 disabled=not abr_uploads or _abr_parser is None or _gesperrt_sb):
         abr_neu    = dict(st.session_state.get(_abr_key) or {})
         abrpdf_neu = dict(st.session_state.get(_abrpdf_key) or {})
         n_dok = 0
@@ -898,6 +923,9 @@ abr_key    = f"gh_abr_{_ns}"      # Rechnungsnr → {datum, betrag} laut Abrechn
 abrpdf_key = f"gh_abrpdfs_{_ns}"  # Abrechnungs-PDFs (dateiname → bytes)
 report_key = f"gh_report_{_ns}"   # persistenter Report-Wert
 rep_wkey   = f"report_input_{_ns}" # Widget-Key des Textfelds
+lock_key   = f"gh_locked_{_ns}"   # bool: Monat gesperrt
+lockam_key = f"gh_lockedat_{_ns}" # Zeitstempel der Sperre
+snap_key   = f"gh_snapshot_{_ns}" # eingefrorene Preise (PZN → Preis)
 
 for k in [roh_key, totals_key, agg_key, pdf_key, abr_key, abrpdf_key]:
     if k not in st.session_state:
@@ -916,7 +944,8 @@ def _report_sichern():
 load_flag = f"gh_loaded_{_ns}"
 if drive and st.session_state[roh_key] is None and not st.session_state.get(load_flag):
     if monat_existiert_in_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl):
-        df_roh_drive, totals_drive, abr_drive, report_drive = lade_monat_aus_drive(
+        (df_roh_drive, totals_drive, abr_drive, report_drive,
+         gesperrt_drive, gesperrtam_drive, snap_drive) = lade_monat_aus_drive(
             drive, gh_auswahl, int(jahr_auswahl), monat_auswahl
         )
         st.session_state[roh_key] = (
@@ -926,9 +955,15 @@ if drive and st.session_state[roh_key] is None and not st.session_state.get(load
         st.session_state[totals_key] = totals_drive
         st.session_state[abr_key]    = abr_drive
         st.session_state[report_key] = report_drive
+        st.session_state[lock_key]   = gesperrt_drive
+        st.session_state[lockam_key] = gesperrtam_drive
+        st.session_state[snap_key]   = snap_drive
         st.session_state[pdf_key]    = lade_pdfs_aus_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl)
         st.session_state[abrpdf_key] = lade_abr_pdfs_aus_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl)
     st.session_state[load_flag] = True
+
+# Sperr-Status für den aktiven Monat
+gesperrt = bool(st.session_state.get(lock_key))
 
 # ─── PDFs einlesen ────────────────────────────────────────────────────────────
 
@@ -938,7 +973,9 @@ for _lvl, _txt in st.session_state.pop("gh_upl_msgs", []):
 
 _sammel_parser = PARSER.get(gh_auswahl, {}).get("sammel")
 
-if verarbeiten and uploads and _sammel_parser is None:
+if verarbeiten and uploads and gesperrt:
+    st.warning(f"{monat_label} ist gesperrt — zum Einlesen erst entsperren.")
+elif verarbeiten and uploads and _sammel_parser is None:
     st.warning(f"Sammelrechnungs-Parser für {gh_auswahl} folgt — Einlesen noch nicht möglich.")
 elif verarbeiten and uploads:
     alle_zeilen = []
@@ -1007,8 +1044,12 @@ if df_roh is None:
     df_roh = pd.DataFrame(columns=["PZN", "Menge", "EK_ohne_MWSt", "Warenwert", "Beleg", "Jahr", "Monat"])
 totals = st.session_state.get(totals_key) or {}
 pdfs   = st.session_state.get(pdf_key) or {}
-preise = resolve_preise(st.session_state.get("gh_preise_master"),
-                        int(jahr_auswahl), monat_auswahl)
+if gesperrt:
+    # eingefrorene Preise verwenden (neue Master-Uploads wirken nicht)
+    preise = st.session_state.get(snap_key) or {}
+else:
+    preise = resolve_preise(st.session_state.get("gh_preise_master"),
+                            int(jahr_auswahl), monat_auswahl)
 abr    = st.session_state.get(abr_key) or {}
 
 # Alle bekannten Belege (inkl. solcher ohne erkannte Positionen)
@@ -1033,14 +1074,17 @@ else:
     )
     st.session_state[agg_key] = df_agg
 
-    # ─── Globale Speichern-Leiste (über allen Tabs sichtbar) ───────────────────
+    # ─── Globale Speichern-/Sperr-Leiste (über allen Tabs sichtbar) ────────────
     def _speichern_ausfuehren():
         abr_session    = st.session_state.get(abr_key) or {}
         abrpdf_session = st.session_state.get(abrpdf_key) or {}
         report_session = st.session_state.get(report_key) or ""
         speichere_monat_in_drive(
             drive, gh_auswahl, df_agg, df_roh, totals, abr_session, report_session,
-            int(jahr_auswahl), monat_auswahl
+            int(jahr_auswahl), monat_auswahl,
+            gesperrt=bool(st.session_state.get(lock_key)),
+            gesperrt_am=st.session_state.get(lockam_key, ""),
+            snapshot=st.session_state.get(snap_key) or {},
         )
         pdfs_session = st.session_state.get(pdf_key) or {}
         n_neu  = speichere_pdfs_in_drive(drive, gh_auswahl, pdfs_session, int(jahr_auswahl), monat_auswahl)
@@ -1057,8 +1101,38 @@ else:
 
     confirm_key = f"gh_confirm_overwrite_{_ns}"
 
-    if drive:
-        _sp_l, _sp_r = st.columns([3, 1])
+    if drive and gesperrt:
+        # Gesperrt: Statusbanner + Entsperren
+        _lk_l, _lk_r = st.columns([3, 1])
+        with _lk_l:
+            st.warning(f"🔒 **Gesperrt** ({st.session_state.get(lockam_key,'')}) — "
+                       f"read-only. Preise eingefroren.")
+        with _lk_r:
+            if st.button("🔓 Entsperren", use_container_width=True):
+                st.session_state[lock_key]   = False
+                st.session_state[lockam_key] = ""
+                with st.spinner("Entsperre & speichere …"):
+                    try:
+                        _speichern_ausfuehren()
+                    except Exception as e:
+                        st.error(f"Drive-Fehler: {e}")
+                st.rerun()
+    elif drive:
+        _sp_l, _sp_m, _sp_r = st.columns([2, 1, 1])
+        with _sp_m:
+            if st.button("🔒 Abschließen & sperren", use_container_width=True):
+                _report_sichern()
+                from datetime import datetime as _dt
+                st.session_state[lock_key]   = True
+                st.session_state[lockam_key] = _dt.now().strftime("%d.%m.%Y %H:%M")
+                # aktuell aufgelöste Preise einfrieren
+                st.session_state[snap_key] = dict(preise)
+                with st.spinner("Sperre & speichere …"):
+                    try:
+                        _speichern_ausfuehren()
+                    except Exception as e:
+                        st.error(f"Drive-Fehler: {e}")
+                st.rerun()
         with _sp_r:
             if st.button("💾 Aktuellen Stand speichern", use_container_width=True, type="primary"):
                 _report_sichern()   # Textfeld-Wert sichern, bevor evtl. rerun das Widget verwirft
@@ -1296,6 +1370,7 @@ else:
                     num_rows="dynamic",
                     use_container_width=True,
                     hide_index=True,
+                    disabled=gesperrt,
                     key=f"editor_beleg_{beleg}",
                 )
 
@@ -1309,7 +1384,8 @@ else:
                         st.warning(f"Nach Korrektur weiterhin {neue_diff:+.2f} € Differenz "
                                    f"({neuer_wert:,.2f} € berechnet vs. {beleg_wert:,.2f} € laut Beleg).")
 
-                if st.button("💾 Korrekturen übernehmen", key=f"save_{beleg}", type="primary"):
+                if st.button("💾 Korrekturen übernehmen", key=f"save_{beleg}",
+                             type="primary", disabled=gesperrt):
                     edited = edited[edited["PZN"].notna() & (edited["PZN"].astype(str) != "")]
                     edited["Beleg"] = beleg
                     edited["Jahr"]  = df_b["Jahr"].iloc[0]  if not df_b.empty else int(jahr_auswahl)
@@ -1488,6 +1564,7 @@ else:
                 height=200,
                 placeholder="Auffälligkeiten, Klärungen, offene Punkte zum Monat …",
                 label_visibility="collapsed",
+                disabled=gesperrt,
             )
             # Bei jedem Render den aktuellen Wert in den persistenten Key übernehmen
             _report_sichern()
