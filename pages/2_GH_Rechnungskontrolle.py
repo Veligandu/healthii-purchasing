@@ -1150,7 +1150,11 @@ if drive and st.session_state[roh_key] is None and not st.session_state.get(load
         st.session_state[lockam_key] = gesperrtam_drive
         st.session_state[snap_key]   = snap_drive
         st.session_state[excl_key]   = set(excl_drive or [])
-        st.session_state[pdf_key]    = lade_pdfs_aus_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl)
+        # Sammelrechnungs-PDFs NICHT mehr vorab laden — sie werden in der Belegansicht
+        # on-demand aus Drive geholt. Spart das massenhafte Herunterladen aller PDFs
+        # beim Monatswechsel (Hauptursache für langes Laden).
+        st.session_state[pdf_key]    = {}
+        # Abrechnungs-PDFs sind nur wenige → weiterhin direkt laden (für Download-Bereich)
         st.session_state[abrpdf_key] = lade_abr_pdfs_aus_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl)
     st.session_state[load_flag] = True
 
