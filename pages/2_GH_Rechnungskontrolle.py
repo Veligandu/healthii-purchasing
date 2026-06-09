@@ -158,14 +158,30 @@ GROSSHAENDLER  = ["Phoenix", "Gehe", "Alliance"]   # unterstützte Großhändler
 # Mapping Großhändler → source-Code in der Preis-Masterliste (HEAL wird ignoriert)
 GH_SOURCE = {"Phoenix": "PHX", "Gehe": "GWC", "Alliance": "AHD"}
 
+def _waehle_ordner(_drive, files):
+    """Bei mehreren gleichnamigen Ordnern: den mit Inhalt bevorzugen, sonst den ältesten.
+    Verhindert, dass versehentlich angelegte Leer-Duplikate verwendet werden."""
+    if len(files) == 1:
+        return files[0]["id"]
+    for f in files:  # files ist nach createdTime sortiert (ältester zuerst)
+        kids = _drive.files().list(
+            q=f"'{f['id']}' in parents and trashed=false",
+            fields="files(id)", pageSize=1,
+        ).execute().get("files", [])
+        if kids:
+            return f["id"]
+    return files[0]["id"]
+
+
 @st.cache_data(ttl=120, show_spinner=False)
 def get_gh_folder_id(_drive):
-    """Gibt ID des Hauptordners 'GH-Rechnungen' zurück (legt ihn an falls nötig)."""
+    """Gibt ID des Hauptordners 'GH-Rechnungen' zurück (legt ihn an falls nötig).
+    Bei Duplikaten wird der Ordner mit Inhalt gewählt."""
     q = f"name='{GH_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-    res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
+    res = _drive.files().list(q=q, fields="files(id)", orderBy="createdTime", pageSize=10).execute()
     files = res.get("files", [])
     if files:
-        return files[0]["id"]
+        return _waehle_ordner(_drive, files)
     folder = _drive.files().create(
         body={"name": GH_FOLDER_NAME, "mimeType": "application/vnd.google-apps.folder"},
         fields="id",
@@ -175,14 +191,15 @@ def get_gh_folder_id(_drive):
 
 @st.cache_data(ttl=120, show_spinner=False)
 def get_gh_subfolder_id(_drive, gh):
-    """Gibt ID des GH-Unterordners (z. B. 'GH-Rechnungen/Phoenix') zurück (legt ihn an)."""
+    """Gibt ID des GH-Unterordners (z. B. 'GH-Rechnungen/Phoenix') zurück (legt ihn an).
+    Bei Duplikaten wird der Ordner mit Inhalt gewählt."""
     parent = get_gh_folder_id(_drive)
     q = (f"name='{gh}' and '{parent}' in parents "
          f"and mimeType='application/vnd.google-apps.folder' and trashed=false")
-    res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
+    res = _drive.files().list(q=q, fields="files(id)", orderBy="createdTime", pageSize=10).execute()
     files = res.get("files", [])
     if files:
-        return files[0]["id"]
+        return _waehle_ordner(_drive, files)
     folder = _drive.files().create(
         body={"name": gh, "parents": [parent],
               "mimeType": "application/vnd.google-apps.folder"},
