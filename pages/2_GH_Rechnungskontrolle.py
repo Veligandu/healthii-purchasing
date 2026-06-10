@@ -903,6 +903,49 @@ def parse_ahd_abr(datei_bytes: bytes) -> dict:
     return out
 
 
+# Alliance-Sammelrechnung (Tagesbeleg): PZN … Menge Hinweis AEP AVP Betrag
+_AHD_POS_RE     = re.compile(
+    r"^\s*(\d{5,8})\s+.+?\s+(\d+)\s+[.A-Z]{2,5}\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s*$")
+_AHD_AUFTRAG_RE = re.compile(r"Auftragsnummer\s*:\s*(\d+)")
+_AHD_LIEFER_RE  = re.compile(r"Lieferdatum\s*:\s*(\d{2})\.(\d{2})\.(\d{4})")
+_AHD_NETTO_RE   = re.compile(r"^Netto\s+.*?([\d.]+,\d{2})\s*$")
+
+def parse_alliance_sammel(datei_bytes: bytes, dateiname: str) -> tuple[pd.DataFrame, float | None]:
+    """Alliance-Sammelrechnung (Tagesbeleg). Gibt (Positionen, Gesamtsumme)."""
+    with pdfplumber.open(io.BytesIO(datei_bytes)) as pdf:
+        text = "\n".join(seite.extract_text() or "" for seite in pdf.pages)
+
+    ma = _AHD_AUFTRAG_RE.search(text)
+    beleg = ma.group(1)[-7:] if ma else os.path.splitext(os.path.basename(dateiname))[0]
+    ml = _AHD_LIEFER_RE.search(text)
+    if ml:
+        monat, jahr = int(ml.group(2)), int(ml.group(3))
+    else:
+        jahr, monat, _ = datum_aus_dateiname(dateiname)
+
+    total_pdf = None
+    zeilen = []
+    for ln in text.splitlines():
+        mn = _AHD_NETTO_RE.match(ln.strip())
+        if mn:
+            total_pdf = _preis_zu_float(mn.group(1))
+        m = _AHD_POS_RE.match(ln)
+        if not m:
+            continue
+        ek   = _preis_zu_float(m.group(3))
+        wert = _preis_zu_float(m.group(5))
+        zeilen.append({
+            "PZN":          m.group(1).zfill(8),
+            "Menge":        int(m.group(2)),
+            "EK_ohne_MWSt": ek if ek is not None else 0.0,
+            "Warenwert":    wert if wert is not None else 0.0,
+            "Beleg":        beleg,
+            "Jahr":         jahr,
+            "Monat":        monat,
+        })
+    return pd.DataFrame(zeilen), total_pdf
+
+
 # ─── Parser-Registry pro Großhändler ──────────────────────────────────────────
 # "sammel":     fn(datei_bytes, dateiname) -> (DataFrame[PZN,Menge,EK_ohne_MWSt,Warenwert,
 #                                              Beleg,Jahr,Monat], rechnungssumme|None)
@@ -911,7 +954,7 @@ def parse_ahd_abr(datei_bytes: bytes) -> dict:
 PARSER = {
     "Phoenix":  {"sammel": parse_phoenix_sammel, "abrechnung": parse_phoenix_abr},
     "Gehe":     {"sammel": parse_gehe_sammel,    "abrechnung": parse_gehe_abr},
-    "Alliance": {"sammel": None,                 "abrechnung": parse_ahd_abr},
+    "Alliance": {"sammel": parse_alliance_sammel, "abrechnung": parse_ahd_abr},
 }
 
 # ─── Header ───────────────────────────────────────────────────────────────────
