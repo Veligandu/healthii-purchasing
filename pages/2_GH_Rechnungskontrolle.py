@@ -1389,8 +1389,9 @@ else:
                 from datetime import datetime as _dt
                 st.session_state[lock_key]   = True
                 st.session_state[lockam_key] = _dt.now().strftime("%d.%m.%Y %H:%M")
-                # aktuell aufgelöste Preise einfrieren
-                st.session_state[snap_key] = dict(preise)
+                # nur die Preise der im Monat vorkommenden PZNs einfrieren
+                _monat_pzns = set(df_agg["PZN"].astype(str))
+                st.session_state[snap_key] = {p: v for p, v in preise.items() if p in _monat_pzns}
                 with st.spinner("Sperre & speichere …"):
                     try:
                         _speichern_ausfuehren()
