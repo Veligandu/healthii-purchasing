@@ -880,6 +880,29 @@ def parse_gehe_sammel(datei_bytes: bytes, dateiname: str) -> tuple[pd.DataFrame,
     return pd.DataFrame(zeilen), total_pdf
 
 
+# ─── AHD/Alliance-Monatsabrechnung ────────────────────────────────────────────
+# Zeile: DATUM(DD.MM)  NL  NR(7-stellig)  [befreit/7%/19%]  GESAMT
+_AHD_ABR_RE = re.compile(r"^\s*(\d{2})\.(\d{2})\s+\d+\s+(\d{7})\s+.*?([\d.]+,\d{2})\s*$")
+
+def parse_ahd_abr(datei_bytes: bytes) -> dict:
+    """Liest aus einer AHD/Alliance-Monatsabrechnung Rechnungsnr → {datum, betrag}."""
+    with pdfplumber.open(io.BytesIO(datei_bytes)) as pdf:
+        text = "\n".join(seite.extract_text() or "" for seite in pdf.pages)
+    my = re.search(r"\b\d{2}\.\d{2}\.(\d{4})\b", text)   # Jahr aus Header-Datum
+    jahr = my.group(1) if my else ""
+    out = {}
+    for ln in text.splitlines():
+        m = _AHD_ABR_RE.match(ln.strip())
+        if not m:
+            continue
+        dd, mm, nr, gesamt = m.group(1), m.group(2), m.group(3), m.group(4)
+        betrag = _preis_zu_float(gesamt)
+        if betrag is None:
+            continue
+        out[nr] = {"datum": f"{jahr}-{mm}-{dd}" if jahr else None, "betrag": betrag}
+    return out
+
+
 # ─── Parser-Registry pro Großhändler ──────────────────────────────────────────
 # "sammel":     fn(datei_bytes, dateiname) -> (DataFrame[PZN,Menge,EK_ohne_MWSt,Warenwert,
 #                                              Beleg,Jahr,Monat], rechnungssumme|None)
@@ -888,7 +911,7 @@ def parse_gehe_sammel(datei_bytes: bytes, dateiname: str) -> tuple[pd.DataFrame,
 PARSER = {
     "Phoenix":  {"sammel": parse_phoenix_sammel, "abrechnung": parse_phoenix_abr},
     "Gehe":     {"sammel": parse_gehe_sammel,    "abrechnung": parse_gehe_abr},
-    "Alliance": {"sammel": parse_gehe_sammel,    "abrechnung": parse_gehe_abr},
+    "Alliance": {"sammel": None,                 "abrechnung": parse_ahd_abr},
 }
 
 # ─── Header ───────────────────────────────────────────────────────────────────
