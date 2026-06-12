@@ -95,6 +95,71 @@ def finde_letzte_bestellung(drive=None):
         return os.path.basename(pfad), pd.read_excel(pfad)
 
 
+EDIT_DATEI = "bestellvorschlag_edit.xlsx"
+
+
+def _input_hash():
+    """Fingerprint der aktuellen Eingabedatei — Bearbeitungsstand gilt nur für dieselbe Datei."""
+    import hashlib
+    return hashlib.md5(st.session_state.get("excel_bytes_input") or b"").hexdigest()
+
+
+def speichere_edit_stand(drive):
+    """Sichert den bearbeiteten Bestellvorschlag in Drive, übersteht App-Neustarts."""
+    df = st.session_state.get("df_bestellen_edit")
+    if drive is None or df is None or df.empty:
+        return
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        df.to_excel(w, index=False, sheet_name="edit")
+        pd.DataFrame({"hash": [_input_hash()]}).to_excel(w, index=False, sheet_name="meta")
+    upload_bytes_to_drive(
+        drive, buf.getvalue(), EDIT_DATEI, get_stammdaten_folder_id(drive),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+def lade_edit_stand(drive):
+    """Lädt den gesicherten Bearbeitungsstand, falls er zur aktuellen Eingabedatei passt."""
+    if drive is None:
+        return None
+    try:
+        sid = get_stammdaten_folder_id(drive)
+        q = f"name='{EDIT_DATEI}' and '{sid}' in parents and trashed=false"
+        files = drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
+        if not files:
+            return None
+        from googleapiclient.http import MediaIoBaseDownload
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, drive.files().get_media(fileId=files[0]["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        buf.seek(0)
+        meta = pd.read_excel(buf, sheet_name="meta")
+        if str(meta["hash"].iloc[0]) != _input_hash():
+            return None  # gehört zu einer anderen Wiederbestelldatei
+        buf.seek(0)
+        df = pd.read_excel(buf, sheet_name="edit")
+        df["Pzn"] = df["Pzn"].astype(str)
+        return df
+    except Exception:
+        return None
+
+
+def loesche_edit_stand(drive):
+    """Entfernt den gesicherten Bearbeitungsstand aus Drive."""
+    if drive is None:
+        return
+    try:
+        sid = get_stammdaten_folder_id(drive)
+        q = f"name='{EDIT_DATEI}' and '{sid}' in parents and trashed=false"
+        for f in drive.files().list(q=q, fields="files(id)").execute().get("files", []):
+            drive.files().delete(fileId=f["id"]).execute()
+    except Exception:
+        pass
+
+
 def lade_historie_cached(force=False):
     """Lädt die Bestellhistorie einmalig und hält sie im Session State.
     Drive-Download nur beim ersten Aufruf oder mit force=True."""
@@ -494,6 +559,10 @@ if not st.session_state.drive_verbunden:
                     st.session_state.uploaded_filename = "wiederbestellung_aktuell.xlsx"
                     if not ergebnis["bestellen"].empty:
                         st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
+                        # Gesicherten Bearbeitungsstand wiederherstellen (falls vorhanden)
+                        _edit_gespeichert = lade_edit_stand(drive)
+                        if _edit_gespeichert is not None:
+                            st.session_state.df_bestellen_edit = _edit_gespeichert
 
             except Exception as e:
                 _fehler = str(e)
@@ -613,6 +682,8 @@ with st.sidebar:
                     st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
                 else:
                     st.session_state.df_bestellen_edit = pd.DataFrame()
+                # Explizite Neuberechnung verwirft den gesicherten Bearbeitungsstand
+                loesche_edit_stand(st.session_state.drive)
             st.rerun()
 
     st.divider()
@@ -891,6 +962,10 @@ with tab1:
             _df_full = _stelle_mbw_wieder_her(_df_full, ergebnis)
             st.session_state.df_bestellen_edit = _df_full
             st.session_state["excel_out"] = None  # Excel invalidieren
+            try:
+                speichere_edit_stand(st.session_state.drive)
+            except Exception:
+                pass  # Drive-Sicherung optional, Session-Stand gilt trotzdem
             st.success(f"✓ Übernommen{f' — {_markiert} Position(en) entfernt' if _markiert else ''}")
             st.rerun()
 
@@ -1026,6 +1101,7 @@ with tab1:
                         # Session zurücksetzen
                         st.session_state.ergebnis          = None
                         st.session_state.df_bestellen_edit = None
+                        loesche_edit_stand(drive_conn)
                         st.rerun()
 
                     except Exception as e:
