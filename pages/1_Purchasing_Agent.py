@@ -846,18 +846,14 @@ with tab1:
             "🗑", help="Zeile zum Löschen markieren", width="small"
         )
 
-        # Bestand-0-Indikator (data_editor unterstützt keine Zellfarben)
-        if "Lagerbestand" in df_display.columns:
-            df_display.insert(
-                1, "🔴",
-                df_display["Lagerbestand"].fillna(0).eq(0).map(lambda b: "🔴" if b else ""),
-            )
-            col_config["🔴"] = st.column_config.TextColumn(
-                "🔴", help="Lagerbestand ist 0", disabled=True, width="small"
-            )
+        # Bestand-0-Zeilen rötlich einfärben (greift nur auf nicht-editierbaren Spalten)
+        def _stil_bestand_null(row):
+            if row.get("Lagerbestand", 1) == 0:
+                return ["background-color: rgba(220, 38, 38, 0.18)"] * len(row)
+            return [""] * len(row)
 
         edited = st.data_editor(
-            df_display,
+            df_display.style.apply(_stil_bestand_null, axis=1),
             column_config=col_config,
             use_container_width=True,
             hide_index=True,
