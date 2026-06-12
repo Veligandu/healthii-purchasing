@@ -948,6 +948,17 @@ with tab1:
         # Bestellwert live neu berechnen
         edited["Bestellwert"] = edited["Bestellmenge"] * edited["Rechnungs Netto Ek Ve1"]
 
+        # Geänderte Mengen sofort übernehmen, damit der Bestellwert direkt aktualisiert angezeigt wird
+        _df_session = st.session_state.df_bestellen_edit.copy().reset_index(drop=True)
+        _menge_neu = pd.to_numeric(edited["Bestellmenge"], errors="coerce").fillna(0).values
+        _menge_alt = pd.to_numeric(_df_session["Bestellmenge"], errors="coerce").fillna(0).values
+        if len(_menge_neu) == len(_menge_alt) and (_menge_neu != _menge_alt).any():
+            _df_session["Bestellmenge"] = _menge_neu
+            _df_session["Bestellwert"]  = (_menge_neu * _df_session["Rechnungs Netto Ek Ve1"]).round(2)
+            st.session_state.df_bestellen_edit = _df_session
+            st.session_state["excel_out"] = None
+            st.rerun()
+
         _markiert = edited["🗑"].sum()
         _btn_label = f"💾 Änderungen übernehmen{f'  ({_markiert} Zeile(n) löschen)' if _markiert else ''}"
         if st.button(_btn_label, type="primary"):
