@@ -95,6 +95,17 @@ def finde_letzte_bestellung(drive=None):
         return os.path.basename(pfad), pd.read_excel(pfad)
 
 
+def lade_historie_cached(force=False):
+    """Lädt die Bestellhistorie einmalig und hält sie im Session State.
+    Drive-Download nur beim ersten Aufruf oder mit force=True."""
+    if force or "_hist_cache" not in st.session_state:
+        try:
+            st.session_state["_hist_cache"] = finde_letzte_bestellung(st.session_state.drive)
+        except Exception:
+            st.session_state.setdefault("_hist_cache", (None, None))
+    return st.session_state["_hist_cache"]
+
+
 _ALGO_DEFAULTS = {
     "algo_w30":              0.7,
     "algo_w90":              0.3,
@@ -608,12 +619,7 @@ with st.sidebar:
 
     # ── Letzte Bestellung Status ──
     st.header("📋 Letzte Bestellung")
-    try:
-        hist_name, df_hist_sidebar = finde_letzte_bestellung(st.session_state.drive)
-        st.session_state["_hist_cache"] = (hist_name, df_hist_sidebar)
-    except Exception:
-        _cached = st.session_state.get("_hist_cache")
-        hist_name, df_hist_sidebar = _cached if _cached else (None, None)
+    hist_name, df_hist_sidebar = lade_historie_cached()
     if df_hist_sidebar is not None:
         n_gesamt = len(df_hist_sidebar)
         n_offen  = len(df_hist_sidebar[
@@ -840,6 +846,16 @@ with tab1:
             "🗑", help="Zeile zum Löschen markieren", width="small"
         )
 
+        # Bestand-0-Indikator (data_editor unterstützt keine Zellfarben)
+        if "Lagerbestand" in df_display.columns:
+            df_display.insert(
+                1, "🔴",
+                df_display["Lagerbestand"].fillna(0).eq(0).map(lambda b: "🔴" if b else ""),
+            )
+            col_config["🔴"] = st.column_config.TextColumn(
+                "🔴", help="Lagerbestand ist 0", disabled=True, width="small"
+            )
+
         edited = st.data_editor(
             df_display,
             column_config=col_config,
@@ -1035,8 +1051,12 @@ with tab2:
         ]
         anzeige_cols = [c for c in anzeige_cols if c in df_unter_mbw.columns]
 
+        def _zeile_bestand_null(row):
+            farbe = "background-color: rgba(220, 38, 38, 0.18)" if row.get("Lagerbestand", 1) == 0 else ""
+            return [farbe] * len(row)
+
         st.dataframe(
-            df_unter_mbw[anzeige_cols],
+            df_unter_mbw[anzeige_cols].style.apply(_zeile_bestand_null, axis=1),
             column_config={
                 "Pzn":                    st.column_config.TextColumn("PZN"),
                 "Artikelname":            st.column_config.TextColumn("Artikelname", width="large"),
@@ -1058,13 +1078,7 @@ with tab2:
 # ══════════════════════════════════════════════════════════════════════════════
 
 with tab3:
-    # Cache aus Sidebar nutzen, nur bei Bedarf neu laden
-    try:
-        hist_name_t3, df_hist = finde_letzte_bestellung(st.session_state.drive)
-        st.session_state["_hist_cache"] = (hist_name_t3, df_hist)
-    except Exception:
-        _cached = st.session_state.get("_hist_cache")
-        hist_name_t3, df_hist = _cached if _cached else (None, None)
+    hist_name_t3, df_hist = lade_historie_cached()
 
     if df_hist is None:
         st.info("Noch keine Bestellhistorie vorhanden.")
@@ -1085,8 +1099,12 @@ with tab3:
 
         n_offen = (df_hist["eingelagert"].astype(str).str.strip().str.lower() == "nein").sum()
 
-        col_info, col_alle = st.columns([3, 1])
+        col_info, col_reload, col_alle = st.columns([3, 1, 1])
         col_info.caption(f"{n_offen} von {len(df_hist)} Positionen noch nicht eingelagert")
+        with col_reload:
+            if st.button("🔄 Neu laden", use_container_width=True):
+                lade_historie_cached(force=True)
+                st.rerun()
 
         def _speichere_historie_drive(df_speichern, name):
             """Speichert die Bestellhistorie als Excel in Drive, mit 3 Retry-Versuchen."""
@@ -1135,6 +1153,7 @@ with tab3:
                 df_hist["eingelagert"] = "ja"
                 with st.spinner("Speichere …"):
                     _speichere_historie_drive(df_hist, hist_name_t3)
+                st.session_state["_hist_cache"] = (hist_name_t3, df_hist)
                 st.success("✓ Alle Positionen eingelagert & in Drive gespeichert")
                 st.rerun()
 
@@ -1161,6 +1180,7 @@ with tab3:
             df_hist[hist_cols] = edited_hist
             with st.spinner("Speichere …"):
                 _speichere_historie_drive(df_hist, hist_name_t3)
+            st.session_state["_hist_cache"] = (hist_name_t3, df_hist)
             st.success("✓ Bestellhistorie in Drive gespeichert")
             st.rerun()
 
