@@ -915,7 +915,7 @@ with tab1:
             "Lagerbestand":            st.column_config.NumberColumn("Lagerbestand",     disabled=True),
             "Verkaeufe L30":           st.column_config.NumberColumn("L30",              disabled=True),
             "Verkaeufe L90":           st.column_config.NumberColumn("L90",              disabled=True),
-            "Ve2":                     st.column_config.NumberColumn("Ve2",              disabled=True),
+            "Ve2":                     st.column_config.NumberColumn("Ve2",              format="%d", disabled=True),
             "Rechnungs Netto Ek Ve2":  st.column_config.NumberColumn("EK Ve2 (€)",       format="%.2f", disabled=True),
         }
 
