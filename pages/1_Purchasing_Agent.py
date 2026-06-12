@@ -672,20 +672,24 @@ with tab1:
     with st.expander("⚙️ Algorithmus"):
 
         # MBW-Ausnahmen laden (außerhalb des Forms — data_editor nicht in st.form möglich)
+        # Einmalig aus Drive laden und im Session State halten
         _drive_mbw = st.session_state.get("drive")
-        _mbw_df_current = None
-        if _drive_mbw:
-            try:
-                _sid = get_stammdaten_folder_id(_drive_mbw)
-                _mbw_df_current = download_csv_from_drive(_drive_mbw, "mbw_exceptions.csv", _sid)
-            except Exception:
-                pass
-        if _mbw_df_current is None:
-            _mbw_df_current = pd.DataFrame({"Hersteller": pd.Series([], dtype=str), "MBW": pd.Series([], dtype=float)})
-        else:
-            _mbw_df_current = _mbw_df_current[["Hersteller", "MBW"]].copy()
-            _mbw_df_current["Hersteller"] = _mbw_df_current["Hersteller"].astype(str)
-            _mbw_df_current["MBW"] = pd.to_numeric(_mbw_df_current["MBW"], errors="coerce").fillna(0.0)
+        if "_mbw_cache" not in st.session_state:
+            _mbw_df_current = None
+            if _drive_mbw:
+                try:
+                    _sid = get_stammdaten_folder_id(_drive_mbw)
+                    _mbw_df_current = download_csv_from_drive(_drive_mbw, "mbw_exceptions.csv", _sid)
+                except Exception:
+                    pass
+            if _mbw_df_current is None:
+                _mbw_df_current = pd.DataFrame({"Hersteller": pd.Series([], dtype=str), "MBW": pd.Series([], dtype=float)})
+            else:
+                _mbw_df_current = _mbw_df_current[["Hersteller", "MBW"]].copy()
+                _mbw_df_current["Hersteller"] = _mbw_df_current["Hersteller"].astype(str)
+                _mbw_df_current["MBW"] = pd.to_numeric(_mbw_df_current["MBW"], errors="coerce").fillna(0.0)
+            st.session_state["_mbw_cache"] = _mbw_df_current
+        _mbw_df_current = st.session_state["_mbw_cache"]
 
         with st.form("algo_form"):
             col_a, col_b = st.columns(2)
@@ -758,6 +762,8 @@ with tab1:
         # MBW-Ausnahmen Tabelle (außerhalb des Forms)
         st.divider()
         st.caption("**Hersteller-Ausnahmen (mbw_exceptions.csv)**")
+        if st.session_state.pop("_mbw_saved", False):
+            st.success("✓ MBW-Ausnahmen gespeichert")
         _mbw_edited = st.data_editor(
             _mbw_df_current,
             column_config={
@@ -785,7 +791,15 @@ with tab1:
                             body={"name": "mbw_exceptions.csv", "parents": [_sid]},
                             media_body=_media, fields="id",
                         ).execute()
-                    st.success("✓ MBW-Ausnahmen gespeichert")
+                    # Cache aktualisieren und Editor-State zurücksetzen,
+                    # sonst kollidiert der alte Widget-State mit den neuen Daten
+                    _mbw_clean = _mbw_edited.copy()
+                    _mbw_clean["Hersteller"] = _mbw_clean["Hersteller"].astype(str)
+                    _mbw_clean["MBW"] = pd.to_numeric(_mbw_clean["MBW"], errors="coerce").fillna(0.0)
+                    st.session_state["_mbw_cache"] = _mbw_clean.reset_index(drop=True)
+                    st.session_state.pop("mbw_exceptions_editor", None)
+                    st.session_state["_mbw_saved"] = True
+                    st.rerun()
                 except Exception as _e:
                     st.error(f"Fehler: {_e}")
             else:
