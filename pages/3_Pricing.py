@@ -456,10 +456,76 @@ with tab_snap:
             )
             st.caption("Negativ = Channel im Schnitt günstiger als Quote, positiv = teurer.")
 
-            # Verteilung der Produkte über die Cluster
-            st.markdown("##### Anzahl Produkte je Preis-Cluster")
-            verteilung = df.groupby("Cluster", observed=False).size().reindex(PRICE_LABELS).fillna(0)
-            st.bar_chart(verteilung, color="#0D9488")
+            st.divider()
+
+            # ── Kritische Preise ──
+            st.markdown("##### Kritische Preise")
+            f1, f2 = st.columns([2, 1])
+            with f1:
+                art = st.radio(
+                    "Filter",
+                    ["Unter Quote", "Über Quote", "Beide"],
+                    horizontal=True, key="krit_art",
+                    help="Channel-Preise, die deutlich unter dem Quote-Preis liegen "
+                         "oder über dem Quote-Preis liegen.",
+                )
+            with f2:
+                schwelle = st.slider("Schwelle „unter Quote“ (%)", 1, 50, 10, key="krit_schwelle")
+
+            # Long-Format: eine Zeile je Produkt × Channel
+            long = df.melt(
+                id_vars=["productId", "quote", "Cluster"],
+                value_vars=CHANNEL_COLS, var_name="ChannelCol", value_name="ChannelPreis",
+            )
+            long = long[long["ChannelPreis"].notna()].copy()
+            long["Channel"] = long["ChannelCol"].map(dict(zip(CHANNEL_COLS, CHANNEL_LABELS)))
+            long["pct"] = (long["ChannelPreis"] - long["quote"]) / long["quote"] * 100
+
+            unter = long[long["pct"] < -schwelle].copy()
+            unter["Kategorie"] = f"> {schwelle} % unter Quote"
+            ueber = long[long["pct"] > 0].copy()
+            ueber["Kategorie"] = "über Quote"
+
+            if art == "Unter Quote":
+                krit = unter
+            elif art == "Über Quote":
+                krit = ueber
+            else:
+                krit = pd.concat([unter, ueber])
+
+            if krit.empty:
+                st.success("Keine kritischen Preise für diese Auswahl.")
+            else:
+                krit = krit.sort_values("pct")  # stärkste Unterschreitung zuerst
+                out = krit[["productId", "Channel", "quote", "ChannelPreis", "pct", "Cluster", "Kategorie"]].copy()
+                out["quote"] = out["quote"].round(2)
+                out["ChannelPreis"] = out["ChannelPreis"].round(2)
+                out["pct"] = out["pct"].round(1)
+                out = out.rename(columns={
+                    "productId": "PZN", "quote": "Quote", "ChannelPreis": "Channel-Preis", "pct": "Δ %",
+                })
+                st.caption(
+                    f"{len(out):,} kritische Preise".replace(",", ".")
+                    + (f" · {len(unter):,} unter Quote".replace(",", ".") if art != "Über Quote" else "")
+                    + (f" · {len(ueber):,} über Quote".replace(",", ".") if art != "Unter Quote" else "")
+                )
+                st.dataframe(
+                    out, use_container_width=True, hide_index=True,
+                    column_config={
+                        "Quote": st.column_config.NumberColumn(format="%.2f €"),
+                        "Channel-Preis": st.column_config.NumberColumn(format="%.2f €"),
+                        "Δ %": st.column_config.NumberColumn(format="%.1f %%"),
+                    },
+                )
+                buf = io.BytesIO()
+                with pd.ExcelWriter(buf, engine="openpyxl") as w:
+                    out.to_excel(w, index=False, sheet_name="Kritische Preise")
+                st.download_button(
+                    "📥 Kritische Preise als Excel",
+                    data=buf.getvalue(),
+                    file_name=f"kritische_preise_{sel}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
 
 # ════════════════════════════════════════════════════════════════════════════════
 # TAB 2 – Vergleich (zwei Zeitpunkte)
