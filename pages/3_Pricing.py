@@ -303,25 +303,15 @@ if drive is None:
     st.error("Keine Verbindung zu Google Drive. Bitte Anmeldedaten prüfen.")
     st.stop()
 
-tab_upload, tab_snap, tab_cmp, tab_sales = st.tabs(
-    ["📥 Daten hochladen", "📊 Momentaufnahme", "🔀 Vergleich", "🛒 Abverkauf"]
-)
-
 # ════════════════════════════════════════════════════════════════════════════════
-# TAB 1 – Upload
+# SIDEBAR – Preisdateien hochladen
 # ════════════════════════════════════════════════════════════════════════════════
-with tab_upload:
-    st.subheader("Preisdateien hochladen")
-    st.markdown(
-        "Lade die **Quote-Preisdatei** und die **Channel-Preisdatei** eines Zeitpunkts hoch. "
-        "Das Datum wird automatisch aus dem Dateinamen erkannt (`…_DDMMYY.csv`) und kann unten korrigiert werden."
-    )
+with st.sidebar:
+    st.header("📥 Preise hochladen")
+    st.caption("Quote- und Channel-Preisdatei eines Zeitpunkts. Datum wird aus dem Dateinamen erkannt.")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        quote_file = st.file_uploader("Quote-Preise (CSV)", type=["csv"], key="up_quote")
-    with c2:
-        channel_file = st.file_uploader("Channel-Preise (CSV)", type=["csv"], key="up_channel")
+    quote_file = st.file_uploader("Quote-Preise (CSV)", type=["csv"], key="up_quote")
+    channel_file = st.file_uploader("Channel-Preise (CSV)", type=["csv"], key="up_channel")
 
     # Datum vorbelegen aus Dateinamen
     erkanntes_datum = None
@@ -337,20 +327,20 @@ with tab_upload:
     if quote_file is not None:
         try:
             q_prev = parse_quote_bytes(quote_file.getvalue())
-            st.success(f"Quote-Preise: {len(q_prev):,} Produkte erkannt".replace(",", "."))
+            st.success(f"Quote: {len(q_prev):,} Produkte".replace(",", "."))
         except Exception as e:
-            st.error(f"Quote-Datei konnte nicht gelesen werden: {e}")
+            st.error(f"Quote-Datei nicht lesbar: {e}")
     if channel_file is not None:
         try:
             ch_prev = parse_channel_bytes(channel_file.getvalue())
             abdeckung = {lbl: int(ch_prev[c].notna().sum()) for c, lbl in zip(CHANNEL_COLS, CHANNEL_LABELS)}
-            st.success(f"Channel-Preise: {len(ch_prev):,} Produkte erkannt".replace(",", "."))
-            st.caption("Abdeckung je Channel: " + " · ".join(f"{k}: {v:,}".replace(",", ".") for k, v in abdeckung.items()))
+            st.success(f"Channel: {len(ch_prev):,} Produkte".replace(",", "."))
+            st.caption("Abdeckung: " + " · ".join(f"{k}: {v:,}".replace(",", ".") for k, v in abdeckung.items()))
         except Exception as e:
-            st.error(f"Channel-Datei konnte nicht gelesen werden: {e}")
+            st.error(f"Channel-Datei nicht lesbar: {e}")
 
-    st.divider()
-    if st.button("💾 In Drive speichern", type="primary", disabled=(quote_file is None and channel_file is None)):
+    if st.button("💾 In Drive speichern", type="primary", use_container_width=True,
+                 disabled=(quote_file is None and channel_file is None)):
         folder_id = get_pricing_folder_id(drive)
         ddmmyy = snap_datum.strftime("%d%m%y")
         gespeichert = []
@@ -362,29 +352,33 @@ with tab_upload:
             gespeichert.append("Channel-Preise")
         list_snapshots.clear()
         load_snapshot.clear()
-        st.success(f"Gespeichert für {snap_datum.strftime('%d.%m.%Y')}: {', '.join(gespeichert)}")
+        st.success(f"Gespeichert ({snap_datum.strftime('%d.%m.%Y')}): {', '.join(gespeichert)}")
 
     # Vorhandene Snapshots anzeigen
     st.divider()
     st.markdown("##### Gespeicherte Zeitpunkte")
-    snaps = list_snapshots(drive)
-    if not snaps:
-        st.info("Noch keine Snapshots gespeichert.")
+    _snaps = list_snapshots(drive)
+    if not _snaps:
+        st.caption("Noch keine Snapshots gespeichert.")
     else:
         rows = [{
             "Datum": fmt_date(k),
-            "Quote-Preise": "✅" if v["quote_id"] else "—",
-            "Channel-Preise": "✅" if v["channel_id"] else "—",
-        } for k, v in snaps.items()]
+            "Quote": "✅" if v["quote_id"] else "—",
+            "Channel": "✅" if v["channel_id"] else "—",
+        } for k, v in _snaps.items()]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
+tab_snap, tab_cmp, tab_sales = st.tabs(
+    ["📊 Momentaufnahme", "🔀 Vergleich", "🛒 Abverkauf"]
+)
+
 # ════════════════════════════════════════════════════════════════════════════════
-# TAB 2 – Momentaufnahme (ein Zeitpunkt)
+# TAB 1 – Momentaufnahme (ein Zeitpunkt)
 # ════════════════════════════════════════════════════════════════════════════════
 with tab_snap:
     snaps = list_snapshots(drive)
     if not snaps:
-        st.info("Noch keine Daten vorhanden. Bitte zuerst im Tab „Daten hochladen“ Preise speichern.")
+        st.info("Noch keine Daten vorhanden. Bitte links in der Seitenleiste Preise hochladen.")
     else:
         keys = list(snaps.keys())
         sel = st.selectbox("Zeitpunkt", keys, index=len(keys) - 1,
@@ -466,7 +460,7 @@ with tab_snap:
             st.bar_chart(verteilung, color="#0D9488")
 
 # ════════════════════════════════════════════════════════════════════════════════
-# TAB 3 – Vergleich (zwei Zeitpunkte)
+# TAB 2 – Vergleich (zwei Zeitpunkte)
 # ════════════════════════════════════════════════════════════════════════════════
 with tab_cmp:
     snaps = list_snapshots(drive)
@@ -590,7 +584,7 @@ with tab_cmp:
                 )
 
 # ════════════════════════════════════════════════════════════════════════════════
-# TAB 4 – Abverkauf (später)
+# TAB 3 – Abverkauf (später)
 # ════════════════════════════════════════════════════════════════════════════════
 with tab_sales:
     st.subheader("Abverkaufsdaten")
