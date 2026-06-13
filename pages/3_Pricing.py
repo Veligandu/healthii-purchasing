@@ -396,13 +396,11 @@ with tab_snap:
         else:
             df["Cluster"] = assign_price_cluster(df["quote"])
 
-            # KPIs
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Produkte (Quote)", f"{len(df):,}".replace(",", "."))
-            k2.metric("Ø Quote-Preis", f"{df['quote'].mean():.2f} €")
-            k3.metric("Median Quote", f"{df['quote'].median():.2f} €")
-            anz_channel = int(df[CHANNEL_COLS].notna().any(axis=1).sum())
-            k4.metric("davon mit Channel-Preis", f"{anz_channel:,}".replace(",", "."))
+            # KPIs: Produktzahl Quote + Anzahl je Channel-Preis
+            cols = st.columns(1 + len(CHANNEL_COLS))
+            cols[0].metric("Produkte (Quote)", f"{len(df):,}".replace(",", "."))
+            for i, (c, lbl) in enumerate(zip(CHANNEL_COLS, CHANNEL_LABELS), start=1):
+                cols[i].metric(lbl, f"{int(df[c].notna().sum()):,}".replace(",", "."))
 
             st.divider()
 
