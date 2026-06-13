@@ -434,25 +434,24 @@ with tab_snap:
 
             st.divider()
 
-            # ── Cluster-Übersicht: Ø-Preise je Preiscluster ──
-            st.markdown("##### Ø-Preise je Preis-Cluster")
-            agg = {"quote": "mean"}
-            agg.update({c: "mean" for c in CHANNEL_COLS})
-            cluster_mean = df.groupby("Cluster", observed=False).agg(agg)
-            cluster_count = df.groupby("Cluster", observed=False).size().rename("Anzahl")
-            cl = pd.concat([cluster_count, cluster_mean], axis=1).reset_index()
-            cl = cl.rename(columns={"quote": "Ø Quote",
-                                    **{c: lbl for c, lbl in zip(CHANNEL_COLS, CHANNEL_LABELS)}})
-            num_cols = ["Ø Quote"] + CHANNEL_LABELS
-            for c in num_cols:
-                cl[c] = cl[c].round(2)
+            # ── Cluster-Übersicht: Ø prozentuale Differenz Channel vs. Quote je Cluster ──
+            st.markdown("##### Ø Differenz zum Quote-Preis je Preis-Cluster (%)")
+            tmp = df.copy()
+            for c in CHANNEL_COLS:
+                tmp[c + "_pct"] = (tmp[c] - tmp["quote"]) / tmp["quote"] * 100
+            g = tmp.groupby("Cluster", observed=False)
+            cl = pd.DataFrame({"Anzahl": g.size()})
+            for c, lbl in zip(CHANNEL_COLS, CHANNEL_LABELS):
+                cl[lbl] = g[c + "_pct"].mean().round(1)
+            cl = cl.reset_index()
             st.dataframe(
                 cl, use_container_width=True, hide_index=True,
                 column_config={
                     "Anzahl": st.column_config.NumberColumn(format="%d"),
-                    **{c: st.column_config.NumberColumn(format="%.2f €") for c in num_cols},
+                    **{lbl: st.column_config.NumberColumn(format="%.1f %%") for lbl in CHANNEL_LABELS},
                 },
             )
+            st.caption("Negativ = Channel im Schnitt günstiger als Quote, positiv = teurer.")
 
             # Verteilung der Produkte über die Cluster
             st.markdown("##### Anzahl Produkte je Preis-Cluster")
