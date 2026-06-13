@@ -128,8 +128,14 @@ def is_cloud():
     except Exception:
         return False
 
-@st.cache_resource
 def verbinde_drive():
+    """Baut pro Rerun eine frische Drive-Verbindung auf.
+
+    httplib2 ist nicht thread-safe und persistente Verbindungen werden bei
+    Leerlauf serverseitig geschlossen. Eine über @st.cache_resource/session_state
+    geteilte Verbindung führt deshalb zu BrokenPipeError. Die eigentlichen
+    Drive-Abfragen sind über @st.cache_data(ttl=…) gepuffert, daher ist der
+    Neuaufbau pro Rerun praktisch kostenlos."""
     try:
         import sys
         _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -141,9 +147,7 @@ def verbinde_drive():
     except Exception:
         return None
 
-if "pricing_drive" not in st.session_state:
-    st.session_state.pricing_drive = verbinde_drive()
-drive = st.session_state.pricing_drive
+drive = verbinde_drive()
 
 # ─── Konstanten ────────────────────────────────────────────────────────────────
 
@@ -181,7 +185,7 @@ def _waehle_ordner(_drive, files):
         kids = _drive.files().list(
             q=f"'{f['id']}' in parents and trashed=false",
             fields="files(id)", pageSize=1,
-        ).execute().get("files", [])
+        ).execute(num_retries=3).get("files", [])
         if kids:
             return f["id"]
     return files[0]["id"]
@@ -192,14 +196,15 @@ def get_pricing_folder_id(_drive):
     """ID des Ordners 'Pricing' (legt ihn an falls nötig)."""
     q = (f"name='{PRICING_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' "
          f"and trashed=false")
-    res = _drive.files().list(q=q, fields="files(id)", orderBy="createdTime", pageSize=10).execute()
+    res = _drive.files().list(q=q, fields="files(id)", orderBy="createdTime",
+                              pageSize=10).execute(num_retries=3)
     files = res.get("files", [])
     if files:
         return _waehle_ordner(_drive, files)
     folder = _drive.files().create(
         body={"name": PRICING_FOLDER_NAME, "mimeType": "application/vnd.google-apps.folder"},
         fields="id",
-    ).execute()
+    ).execute(num_retries=3)
     return folder["id"]
 
 
@@ -221,7 +226,7 @@ def _download_bytes(_drive, file_id):
     dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=file_id))
     done = False
     while not done:
-        _, done = dl.next_chunk()
+        _, done = dl.next_chunk(num_retries=3)
     buf.seek(0)
     return buf.getvalue()
 
@@ -234,7 +239,7 @@ def list_snapshots(_drive):
     res = _drive.files().list(
         q=f"'{folder_id}' in parents and trashed=false",
         fields="files(id, name)", pageSize=1000,
-    ).execute()
+    ).execute(num_retries=3)
     snaps = {}
     for f in res.get("files", []):
         d = parse_date_from_filename(f["name"])
