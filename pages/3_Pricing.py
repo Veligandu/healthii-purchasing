@@ -741,54 +741,50 @@ with tab_sales:
         )
         namen = ol.groupby("productId")["productname"].first()
 
-        sub_a, sub_b = st.tabs(["🏃 Schnell-/Langsamdreher", "📉 Preisänderungs-Wirkung"])
+        sub_a, sub_b = st.tabs(["🏆 Rennerliste", "📉 Preisänderungs-Wirkung"])
 
-        # ── A) Schnell-/Langsamdreher ──────────────────────────────────────────
+        # ── A) Rennerliste je Channel (nach Umsatz) ────────────────────────────
         with sub_a:
-            agg = ol.groupby("productId").agg(
+            fc1, fc2 = st.columns([1, 1])
+            with fc1:
+                ch = st.selectbox("Channel", ["Alle Channels"] + ORDER_REFS, key="ab_rl_ch")
+            with fc2:
+                topn = st.slider("Top N", 10, 200, 50, step=10, key="ab_rl_n")
+
+            data = ol if ch == "Alle Channels" else ol[ol["ref"] == ch]
+            renner = data.groupby("productId").agg(
                 Produkt=("productname", "first"),
-                Menge=("quantity", "sum"),
                 Umsatz=("net", "sum"),
+                Menge=("quantity", "sum"),
                 Bestellungen=("quantity", "count"),
-            ).reset_index()
-            q75, q25 = agg["Menge"].quantile(0.75), agg["Menge"].quantile(0.25)
-
-            def klasse(menge):
-                if menge >= q75:
-                    return "Schnelldreher"
-                if menge <= q25:
-                    return "Langsamdreher"
-                return "Mitteldreher"
-
-            agg["Klasse"] = agg["Menge"].map(klasse)
+            ).reset_index().sort_values("Umsatz", ascending=False)
 
             k1, k2, k3 = st.columns(3)
-            k1.metric("Produkte", f"{len(agg):,}".replace(",", "."))
-            k2.metric("Einheiten gesamt", f"{int(agg['Menge'].sum()):,}".replace(",", "."))
-            k3.metric("Umsatz netto", f"{agg['Umsatz'].sum():,.0f} €".replace(",", "."))
+            k1.metric("Produkte", f"{len(renner):,}".replace(",", "."))
+            k2.metric("Umsatz netto", f"{renner['Umsatz'].sum():,.0f} €".replace(",", "."))
+            k3.metric("Einheiten", f"{int(renner['Menge'].sum()):,}".replace(",", "."))
 
-            wahl = st.multiselect("Klasse", ["Schnelldreher", "Mitteldreher", "Langsamdreher"],
-                                  default=["Schnelldreher", "Mitteldreher", "Langsamdreher"],
-                                  key="ab_klasse")
-            show = agg[agg["Klasse"].isin(wahl)].sort_values("Menge", ascending=False)
-            show = show.rename(columns={"productId": "PZN"})
+            show = renner.head(topn).rename(columns={"productId": "PZN"}).copy()
+            show.insert(0, "Rang", range(1, len(show) + 1))
             show["Umsatz"] = show["Umsatz"].round(2)
-            st.caption(f"Schwellen: Schnelldreher ≥ {q75:.0f} · Langsamdreher ≤ {q25:.0f} Einheiten")
             st.dataframe(
-                show[["PZN", "Produkt", "Klasse", "Menge", "Umsatz", "Bestellungen"]],
+                show[["Rang", "PZN", "Produkt", "Umsatz", "Menge", "Bestellungen"]],
                 use_container_width=True, hide_index=True,
                 column_config={
-                    "Menge": st.column_config.NumberColumn(format="%d"),
+                    "Rang": st.column_config.NumberColumn(format="%d"),
                     "Umsatz": st.column_config.NumberColumn(format="%.2f €"),
+                    "Menge": st.column_config.NumberColumn(format="%d"),
                     "Bestellungen": st.column_config.NumberColumn(format="%d"),
                 },
             )
             buf = io.BytesIO()
             with pd.ExcelWriter(buf, engine="openpyxl") as w:
-                show.to_excel(w, index=False, sheet_name="Dreher")
-            st.download_button("📥 Als Excel", data=buf.getvalue(),
-                               file_name="abverkauf_dreher.xlsx", key="ab_dl_a",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                renner.rename(columns={"productId": "PZN"}).to_excel(
+                    w, index=False, sheet_name="Rennerliste")
+            st.download_button(
+                "📥 Als Excel (vollständig)", data=buf.getvalue(),
+                file_name=f"rennerliste_{ch.replace(' ', '_').lower()}.xlsx", key="ab_dl_a",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         # ── B) Preisänderungs-Wirkung ──────────────────────────────────────────
         with sub_b:
