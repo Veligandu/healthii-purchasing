@@ -95,6 +95,108 @@ def finde_letzte_bestellung(drive=None):
         return os.path.basename(pfad), pd.read_excel(pfad)
 
 
+NEUANLAGEN_DATEI = "neuanlagen.csv"
+
+
+def lade_neuanlagen(drive):
+    """Lädt die Neuanlagen-Liste aus Drive (einmalig, danach Session-Cache)."""
+    if "_neuanlagen_cache" not in st.session_state:
+        df = None
+        if drive is not None:
+            try:
+                sid = get_stammdaten_folder_id(drive)
+                df = download_csv_from_drive(drive, NEUANLAGEN_DATEI, sid)
+            except Exception:
+                df = None
+        if df is None or df.empty:
+            df = pd.DataFrame({
+                "PZN":         pd.Series([], dtype=str),
+                "Hersteller":  pd.Series([], dtype=str),
+                "Artikelname": pd.Series([], dtype=str),
+                "Wunschmenge": pd.Series([], dtype="Int64"),
+            })
+        else:
+            for _c in ["PZN", "Hersteller", "Artikelname", "Wunschmenge"]:
+                if _c not in df.columns:
+                    df[_c] = "" if _c != "Wunschmenge" else 1
+            df = df[["PZN", "Hersteller", "Artikelname", "Wunschmenge"]].copy()
+            df["PZN"]         = df["PZN"].astype(str).str.replace(r"\.0$", "", regex=True)
+            df["Hersteller"]  = df["Hersteller"].astype(str)
+            df["Artikelname"] = df["Artikelname"].fillna("").astype(str)
+            df["Wunschmenge"] = pd.to_numeric(df["Wunschmenge"], errors="coerce").fillna(1).astype(int)
+        st.session_state["_neuanlagen_cache"] = df.reset_index(drop=True)
+    return st.session_state["_neuanlagen_cache"]
+
+
+def speichere_neuanlagen(drive, df):
+    """Speichert die Neuanlagen-Liste in Drive und aktualisiert den Cache."""
+    df = df.copy()
+    df["PZN"]         = df["PZN"].astype(str).str.strip()
+    df["Hersteller"]  = df["Hersteller"].astype(str).str.strip()
+    df["Artikelname"] = df["Artikelname"].fillna("").astype(str)
+    df["Wunschmenge"] = pd.to_numeric(df["Wunschmenge"], errors="coerce").fillna(1).astype(int)
+    df = df[(df["PZN"] != "") & (df["Hersteller"] != "")].reset_index(drop=True)
+    st.session_state["_neuanlagen_cache"] = df
+    if drive is not None:
+        from googleapiclient.http import MediaIoBaseUpload as _MIU
+        sid = get_stammdaten_folder_id(drive)
+        _bytes = df.to_csv(index=False).encode()
+        _media = _MIU(io.BytesIO(_bytes), mimetype="text/csv")
+        _q = f"name='{NEUANLAGEN_DATEI}' and '{sid}' in parents and trashed=false"
+        _ex = drive.files().list(q=_q, fields="files(id)", pageSize=1).execute().get("files", [])
+        if _ex:
+            drive.files().update(fileId=_ex[0]["id"], media_body=_media).execute()
+        else:
+            drive.files().create(
+                body={"name": NEUANLAGEN_DATEI, "parents": [sid]},
+                media_body=_media, fields="id",
+            ).execute()
+
+
+def injiziere_neuanlagen(df_bestellen, neuanlagen_df):
+    """Fügt Neuanlagen als grün markierte Zeilen bei Herstellern hinzu, die bestellt werden."""
+    if df_bestellen is None or df_bestellen.empty or neuanlagen_df is None or neuanlagen_df.empty:
+        if df_bestellen is not None and "Neuanlage" not in df_bestellen.columns:
+            df_bestellen = df_bestellen.copy()
+            df_bestellen["Neuanlage"] = False
+        return df_bestellen
+
+    df = df_bestellen.copy()
+    if "Neuanlage" not in df.columns:
+        df["Neuanlage"] = False
+    df["Pzn"] = df["Pzn"].astype(str)
+
+    bestellte_hersteller = set(df["Hersteller"].astype(str))
+    vorhandene_pzn = set(df["Pzn"])
+    neue_zeilen = []
+    for _, na in neuanlagen_df.iterrows():
+        herst = str(na["Hersteller"]).strip()
+        pzn   = str(na["PZN"]).strip()
+        if herst not in bestellte_hersteller or pzn in vorhandene_pzn:
+            continue
+        menge = int(na["Wunschmenge"]) if pd.notna(na["Wunschmenge"]) else 1
+        # MBW vom bestehenden Hersteller-Block übernehmen
+        _grp = df[df["Hersteller"] == herst]
+        zeile = {c: pd.NA for c in df.columns}
+        zeile.update({
+            "Pzn":          pzn,
+            "Hersteller":   herst,
+            "Artikelname":  str(na.get("Artikelname") or "") or "🆕 Neuanlage",
+            "Bestellmenge": menge,
+            "Bestellwert":  0.0,
+            "Neuanlage":    True,
+        })
+        if "MBW" in df.columns and not _grp.empty:
+            zeile["MBW"] = _grp["MBW"].iloc[0]
+        neue_zeilen.append(zeile)
+        vorhandene_pzn.add(pzn)
+
+    if neue_zeilen:
+        df = pd.concat([df, pd.DataFrame(neue_zeilen)], ignore_index=True)
+        df = df.sort_values(["Hersteller", "Neuanlage"]).reset_index(drop=True)
+    return df
+
+
 EDIT_DATEI = "bestellvorschlag_edit.xlsx"
 
 
@@ -558,7 +660,8 @@ if not st.session_state.drive_verbunden:
                     st.session_state.excel_bytes_input = excel_bytes
                     st.session_state.uploaded_filename = "wiederbestellung_aktuell.xlsx"
                     if not ergebnis["bestellen"].empty:
-                        st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
+                        _bv = injiziere_neuanlagen(ergebnis["bestellen"].copy(), lade_neuanlagen(drive))
+                        st.session_state.df_bestellen_edit = _bv
                         # Gesicherten Bearbeitungsstand wiederherstellen (falls vorhanden)
                         _edit_gespeichert = lade_edit_stand(drive)
                         if _edit_gespeichert is not None:
@@ -679,7 +782,9 @@ with st.sidebar:
                 st.session_state.ergebnis            = ergebnis
                 st.session_state.ergebnis_timestamp  = _dt.now().strftime("%d.%m.%Y %H:%M:%S")
                 if not ergebnis["bestellen"].empty:
-                    st.session_state.df_bestellen_edit = ergebnis["bestellen"].copy()
+                    st.session_state.df_bestellen_edit = injiziere_neuanlagen(
+                        ergebnis["bestellen"].copy(), lade_neuanlagen(st.session_state.drive)
+                    )
                 else:
                     st.session_state.df_bestellen_edit = pd.DataFrame()
                 # Explizite Neuberechnung verwirft den gesicherten Bearbeitungsstand
@@ -727,11 +832,12 @@ if ergebnis is not None:
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🛒 Bestellvorschläge",
     "⚠️ Unter MBW – nicht bestellt",
     "📋 Bestellhistorie",
     "📁 Bestellarchiv",
+    "🆕 Neuanlagen",
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -931,14 +1037,23 @@ with tab1:
             "🗑", help="Zeile zum Löschen markieren", width="small"
         )
 
-        # Bestand-0-Zeilen rötlich einfärben (greift nur auf nicht-editierbaren Spalten)
-        def _stil_bestand_null(row):
+        # Neuanlage-Maske positionsgleich zu df_display (gleiche Zeilenreihenfolge)
+        _neuanlage_maske = (
+            df_bestellen["Neuanlage"].fillna(False).astype(bool).reset_index(drop=True).tolist()
+            if "Neuanlage" in df_bestellen.columns else [False] * len(df_display)
+        )
+
+        # Zeilen einfärben (greift nur auf nicht-editierbaren Spalten):
+        # grün = Neuanlage, rot = Lagerbestand 0
+        def _stil_zeile(row):
+            if _neuanlage_maske[row.name]:
+                return ["background-color: rgba(29, 158, 117, 0.20)"] * len(row)
             if row.get("Lagerbestand", 1) == 0:
                 return ["background-color: rgba(220, 38, 38, 0.18)"] * len(row)
             return [""] * len(row)
 
         edited = st.data_editor(
-            df_display.style.apply(_stil_bestand_null, axis=1),
+            df_display.style.apply(_stil_zeile, axis=1),
             column_config=col_config,
             use_container_width=True,
             hide_index=True,
@@ -1365,3 +1480,96 @@ with tab4:
                     file_name=ausgewählt,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 5 – Neuanlagen
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab5:
+    _drive_na = st.session_state.get("drive")
+    st.caption(
+        "Neue Produkte erfassen. Sie werden beim nächsten Bestellvorschlag automatisch "
+        "beim passenden Hersteller mitvorgeschlagen und dort **grün** markiert."
+    )
+
+    # Bekannte Hersteller aus der aktuellen Berechnung
+    if ergebnis and ergebnis.get("hersteller_log"):
+        _hersteller_optionen = sorted(ergebnis["hersteller_log"].keys())
+    else:
+        _hersteller_optionen = []
+
+    _na_df = lade_neuanlagen(_drive_na)
+
+    # ── Neue Position hinzufügen ──
+    with st.form("neuanlage_form", clear_on_submit=True):
+        st.markdown("**Neue Position hinzufügen**")
+        cna1, cna2 = st.columns(2)
+        with cna1:
+            _na_pzn = st.text_input("PZN", max_chars=8, placeholder="z. B. 19790996")
+        with cna2:
+            if _hersteller_optionen:
+                _na_herst = st.selectbox(
+                    "Hersteller", options=[""] + _hersteller_optionen,
+                    help="Tippen zum Filtern — Auswahl aus den bekannten Herstellern",
+                )
+            else:
+                _na_herst = st.text_input(
+                    "Hersteller",
+                    help="Erst nach einer Berechnung stehen die bekannten Hersteller zur Auswahl",
+                )
+        cna3, cna4 = st.columns([3, 1])
+        with cna3:
+            _na_name = st.text_input("Artikelname (optional)", placeholder="Produktname")
+        with cna4:
+            _na_menge = st.number_input("Wunschmenge", min_value=1, value=1, step=1)
+
+        _na_submit = st.form_submit_button("➕ Hinzufügen", type="primary", use_container_width=True)
+
+    if _na_submit:
+        _pzn_clean = str(_na_pzn).strip()
+        _herst_clean = str(_na_herst).strip()
+        if not _pzn_clean or not _herst_clean:
+            st.warning("PZN und Hersteller sind erforderlich.")
+        elif _pzn_clean in _na_df["PZN"].astype(str).values:
+            st.warning(f"PZN {_pzn_clean} ist bereits als Neuanlage erfasst.")
+        else:
+            _neu = pd.DataFrame([{
+                "PZN": _pzn_clean, "Hersteller": _herst_clean,
+                "Artikelname": str(_na_name).strip(), "Wunschmenge": int(_na_menge),
+            }])
+            _na_df = pd.concat([_na_df, _neu], ignore_index=True)
+            try:
+                speichere_neuanlagen(_drive_na, _na_df)
+                st.success(f"✓ {_pzn_clean} ({_herst_clean}) hinzugefügt")
+                st.rerun()
+            except Exception as _e:
+                st.error(f"Fehler beim Speichern: {_e}")
+
+    st.divider()
+
+    # ── Bestehende Neuanlagen ──
+    if _na_df.empty:
+        st.info("Noch keine Neuanlagen erfasst.")
+    else:
+        st.markdown(f"**Erfasste Neuanlagen ({len(_na_df)})**")
+        _na_edit = st.data_editor(
+            _na_df,
+            column_config={
+                "PZN":         st.column_config.TextColumn("PZN", width="small"),
+                "Hersteller":  st.column_config.TextColumn("Hersteller", width="large"),
+                "Artikelname": st.column_config.TextColumn("Artikelname", width="large"),
+                "Wunschmenge": st.column_config.NumberColumn("Wunschmenge", format="%d", min_value=1, step=1),
+            },
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key="neuanlagen_editor",
+        )
+        if st.button("💾 Neuanlagen speichern", type="primary"):
+            try:
+                speichere_neuanlagen(_drive_na, _na_edit)
+                st.session_state.pop("neuanlagen_editor", None)
+                st.success("✓ Neuanlagen gespeichert")
+                st.rerun()
+            except Exception as _e:
+                st.error(f"Fehler beim Speichern: {_e}")
