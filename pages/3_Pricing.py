@@ -210,6 +210,10 @@ def load_orderlines(_drive):
 def load_config(_drive):
     return pl.load_config(_drive)
 
+@st.cache_data(ttl=60, show_spinner=False)
+def load_report(_drive, iso_datum):
+    return pl.load_report(_drive, iso_datum)
+
 
 # ─── Seiteninhalt ──────────────────────────────────────────────────────────────
 
@@ -533,6 +537,24 @@ with tab_snap:
                     file_name=f"kritische_preise_{sel}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
+
+            # ── Report zu dieser Momentaufnahme ────────────────────────────────
+            st.divider()
+            st.markdown(f"##### Report – {fmt_date(sel)}")
+            saved_report = load_report(drive, sel)
+            with st.form(f"report_form_{sel}"):
+                report_txt = st.text_area(
+                    "Kurzer Report zu diesem Zeitpunkt", value=saved_report, height=160,
+                    key=f"report_txt_{sel}",
+                    placeholder="Notizen / Einschätzung zu dieser Momentaufnahme …",
+                )
+                report_submit = st.form_submit_button("💾 Report speichern", type="primary")
+            if report_submit:
+                folder_id = get_pricing_folder_id(drive)
+                upload_bytes_to_drive(drive, report_txt.encode("utf-8"),
+                                      pl.report_filename(sel), folder_id, "text/plain")
+                load_report.clear()
+                st.success("Report gespeichert.")
 
 # ════════════════════════════════════════════════════════════════════════════════
 # TAB 2 – Vergleich (zwei Zeitpunkte)

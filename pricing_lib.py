@@ -181,18 +181,18 @@ def list_snapshots(drive):
     ).execute(num_retries=3)
     snaps = {}
     for f in res.get("files", []):
+        name = f["name"].lower()
+        kind = ("quote_id" if name.startswith("quote") else
+                "channel_id" if name.startswith("channel") else
+                "master_id" if name.startswith("master") else None)
+        if kind is None:  # report_/config/orderlines etc. erzeugen keinen Snapshot
+            continue
         d = parse_date_from_filename(f["name"])
         if d is None:
             continue
-        key = d.isoformat()
-        entry = snaps.setdefault(key, {"quote_id": None, "channel_id": None, "master_id": None})
-        name = f["name"].lower()
-        if name.startswith("quote"):
-            entry["quote_id"] = f["id"]
-        elif name.startswith("channel"):
-            entry["channel_id"] = f["id"]
-        elif name.startswith("master"):
-            entry["master_id"] = f["id"]
+        entry = snaps.setdefault(d.isoformat(),
+                                 {"quote_id": None, "channel_id": None, "master_id": None})
+        entry[kind] = f["id"]
     return dict(sorted(snaps.items()))
 
 
@@ -375,3 +375,23 @@ def ref_label(ref: str, config: dict) -> str:
     if ref == REF_QUOTE:
         return QUOTE_LABEL
     return config.get("channel_labels", {}).get(ref, ref)
+
+
+# ─── Report je Momentaufnahme ────────────────────────────────────────────────────
+
+def report_filename(iso_datum: str) -> str:
+    return "report_" + datetime.fromisoformat(iso_datum).strftime("%d%m%y") + ".txt"
+
+
+def load_report(drive, iso_datum: str) -> str:
+    """Lädt den gespeicherten Report-Text eines Zeitpunkts (oder '')."""
+    folder_id = get_pricing_folder_id(drive)
+    name = report_filename(iso_datum)
+    q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
+    files = drive.files().list(q=q, fields="files(id)", pageSize=1).execute(num_retries=3).get("files", [])
+    if not files:
+        return ""
+    try:
+        return download_bytes(drive, files[0]["id"]).decode("utf-8")
+    except Exception:
+        return ""
