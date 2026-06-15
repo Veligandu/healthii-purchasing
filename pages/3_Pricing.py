@@ -916,41 +916,46 @@ with tab_sales:
 
     # ── Einstellungen: Channel-Bezeichnungen + Source-Zuordnung ─────────────────
     with sub_set:
-        st.markdown("##### Channel-Bezeichnungen")
-        st.caption("Sprechende Namen für die Channel-Preisreihen – werden überall verwendet "
-                   "(Momentaufnahme, Vergleich, Masterdatei-Analyse, Abverkauf).")
-        new_labels = {}
-        lcols = st.columns(len(CHANNEL_COLS))
-        for i, c in enumerate(CHANNEL_COLS):
-            new_labels[c] = lcols[i].text_input(
-                f"channelPrice{i + 1}",
-                value=cfg["channel_labels"].get(c, f"Channel {i + 1}"),
-                key=f"set_lbl_{c}",
-            )
-
-        st.markdown("##### Source-Zuordnung")
-        st.caption("Welche Preisreihe gilt je Marketing-Source? Nicht zugeordnete Sources nutzen den Quote-Preis.")
         opt_refs = [REF_QUOTE] + CHANNEL_COLS
-
-        def _opt_label(r):
-            return QUOTE_LABEL if r == REF_QUOTE else (new_labels.get(r) or r)
-
         sources = set(cfg["source_map"].keys())
         if not ol.empty:
             sources |= set(ol["source"].dropna().unique())
         sources = sorted(s for s in sources if s)
 
-        new_map = {}
-        scols = st.columns(3)
-        for i, s in enumerate(sources):
-            cur = cfg["source_map"].get(s, REF_QUOTE)
-            idx = opt_refs.index(cur) if cur in opt_refs else 0
-            sel = scols[i % 3].selectbox(s, opt_refs, index=idx,
-                                         format_func=_opt_label, key=f"set_src_{s}")
-            if sel != REF_QUOTE:
-                new_map[s] = sel
+        # Form: Eingaben werden gesammelt, Rerun erst beim Speichern (nicht bei jeder Änderung)
+        with st.form("settings_form"):
+            st.markdown("##### Channel-Bezeichnungen")
+            st.caption("Sprechende Namen für die Channel-Preisreihen – werden überall verwendet "
+                       "(Momentaufnahme, Vergleich, Masterdatei-Analyse, Abverkauf).")
+            new_labels = {}
+            lcols = st.columns(len(CHANNEL_COLS))
+            for i, c in enumerate(CHANNEL_COLS):
+                new_labels[c] = lcols[i].text_input(
+                    f"channelPrice{i + 1}",
+                    value=cfg["channel_labels"].get(c, f"Channel {i + 1}"),
+                    key=f"set_lbl_{c}",
+                )
 
-        if st.button("💾 Einstellungen speichern", type="primary", key="set_save"):
+            st.markdown("##### Source-Zuordnung")
+            st.caption("Welche Preisreihe gilt je Marketing-Source? Nicht zugeordnete Sources nutzen den Quote-Preis. "
+                       "Geänderte Channel-Namen erscheinen in den Dropdowns nach dem Speichern.")
+
+            def _opt_label(r):
+                return QUOTE_LABEL if r == REF_QUOTE else (cfg["channel_labels"].get(r) or r)
+
+            new_map = {}
+            scols = st.columns(3)
+            for i, s in enumerate(sources):
+                cur = cfg["source_map"].get(s, REF_QUOTE)
+                idx = opt_refs.index(cur) if cur in opt_refs else 0
+                sel = scols[i % 3].selectbox(s, opt_refs, index=idx,
+                                             format_func=_opt_label, key=f"set_src_{s}")
+                if sel != REF_QUOTE:
+                    new_map[s] = sel
+
+            submitted = st.form_submit_button("💾 Einstellungen speichern", type="primary")
+
+        if submitted:
             new_cfg = {"channel_labels": new_labels, "source_map": new_map}
             folder_id = get_pricing_folder_id(drive)
             upload_bytes_to_drive(drive, pl.config_to_bytes(new_cfg),
