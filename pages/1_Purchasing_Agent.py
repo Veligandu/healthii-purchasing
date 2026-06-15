@@ -1529,11 +1529,6 @@ with tab5:
                     "Hersteller",
                     help="Erst nach einer Berechnung stehen die bekannten Hersteller zur Auswahl",
                 )
-        cna3, cna4 = st.columns([3, 1])
-        with cna3:
-            _na_name = st.text_input("Artikelname (optional)", placeholder="Produktname")
-        with cna4:
-            _na_menge = st.number_input("Wunschmenge", min_value=1, value=1, step=1)
 
         _na_submit = st.form_submit_button("➕ Hinzufügen", type="primary", use_container_width=True)
 
@@ -1547,7 +1542,7 @@ with tab5:
         else:
             _neu = pd.DataFrame([{
                 "PZN": _pzn_clean, "Hersteller": _herst_clean,
-                "Artikelname": str(_na_name).strip(), "Wunschmenge": int(_na_menge),
+                "Artikelname": "", "Wunschmenge": 1,
             }])
             _na_df = pd.concat([_na_df, _neu], ignore_index=True)
             try:
@@ -1565,12 +1560,10 @@ with tab5:
     else:
         st.markdown(f"**Erfasste Neuanlagen ({len(_na_df)})**")
         _na_edit = st.data_editor(
-            _na_df,
+            _na_df[["PZN", "Hersteller"]],
             column_config={
                 "PZN":         st.column_config.TextColumn("PZN", width="small"),
                 "Hersteller":  st.column_config.TextColumn("Hersteller", width="large"),
-                "Artikelname": st.column_config.TextColumn("Artikelname", width="large"),
-                "Wunschmenge": st.column_config.NumberColumn("Wunschmenge", format="%d", min_value=1, step=1),
             },
             num_rows="dynamic",
             use_container_width=True,
@@ -1579,7 +1572,10 @@ with tab5:
         )
         if st.button("💾 Neuanlagen speichern", type="primary"):
             try:
-                speichere_neuanlagen(_drive_na, _na_edit)
+                _na_save = _na_edit.copy()
+                _na_save["Artikelname"] = ""
+                _na_save["Wunschmenge"] = 1
+                speichere_neuanlagen(_drive_na, _na_save)
                 st.session_state.pop("neuanlagen_editor", None)
                 st.success("✓ Neuanlagen gespeichert")
                 st.rerun()
