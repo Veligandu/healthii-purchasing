@@ -236,9 +236,12 @@ with st.sidebar:
     st.header("📥 Preise hochladen")
     st.caption("Quote-, Channel- und Masterdatei eines Zeitpunkts. Datum wird aus dem Dateinamen erkannt.")
 
-    quote_file = st.file_uploader("Quote-Preise (CSV)", type=["csv"], key="up_quote")
-    channel_file = st.file_uploader("Channel-Preise (CSV)", type=["csv"], key="up_channel")
-    master_file = st.file_uploader("Masterdatei (CSV)", type=["csv"], key="up_master")
+    quote_file = st.file_uploader("Quote-Preise (CSV)", type=["csv"], key="up_quote",
+                                  help="Quelle: Google Drive › Pricing")
+    channel_file = st.file_uploader("Channel-Preise (CSV)", type=["csv"], key="up_channel",
+                                    help="Quelle: Google Drive › Pricing")
+    master_file = st.file_uploader("Masterdatei (CSV)", type=["csv"], key="up_master",
+                                   help="Quelle: Download aus Channelpilot")
 
     # Datum vorbelegen aus Dateinamen
     erkanntes_datum = None
@@ -295,7 +298,8 @@ with st.sidebar:
     # ── Orderlines (Abverkauf) – akkumulierend, eigenes Datum je Zeile ──
     st.divider()
     st.markdown("##### Abverkauf (Orderlines)")
-    orderlines_file = st.file_uploader("Orderlines (CSV)", type=["csv"], key="up_orderlines")
+    orderlines_file = st.file_uploader("Orderlines (CSV)", type=["csv"], key="up_orderlines",
+                                       help="Quelle: Metabase › Produkte & Hersteller › Pricing")
     ol_new = None
     if orderlines_file is not None:
         try:
