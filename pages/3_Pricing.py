@@ -391,6 +391,57 @@ with tab_snap:
                 },
             )
 
+            # ── Umsatzgewichtete Preisabweichung (Orderlines, letzte 30 Tage) ──
+            st.markdown("##### Preisabweichung umsatzgewichtet")
+            ol_all = load_orderlines(drive)
+            if ol_all.empty:
+                st.caption("Für die Umsatzgewichtung werden Orderlines benötigt "
+                           "(Upload links in der Seitenleiste).")
+            else:
+                olw = ol_all.copy()
+                olw["ref"] = olw["source"].map(lambda s: ref_for_source(s, source_map))
+                olw["d"] = pd.to_datetime(olw["date"], errors="coerce")
+                olw = olw[olw["d"].notna()]
+                w_bis = olw["d"].max()
+                w_von = w_bis - pd.Timedelta(days=29)
+                olw = olw[olw["d"] >= w_von]
+                rev = olw.groupby(["productId", "ref"])["net"].sum().reset_index()
+
+                w_rows = []
+                for c, lbl in zip(CHANNEL_COLS, CH_LABELS):
+                    sub = df[df[c].notna() & df["quote"].notna()][["productId", c, "quote"]].copy()
+                    sub["pct"] = (sub[c] - sub["quote"]) / sub["quote"] * 100
+                    merged = sub.merge(rev[rev["ref"] == c][["productId", "net"]],
+                                       on="productId", how="inner")
+                    merged = merged[merged["net"] > 0]
+                    if merged.empty:
+                        w_rows.append({"Channel": lbl, "Gew. Ø Diff %": None,
+                                       "Ø Diff % (ungew.)": round(sub["pct"].mean(), 1) if not sub.empty else None,
+                                       "Umsatzbasis €": 0.0, "PZNs (mit Umsatz)": 0})
+                        continue
+                    w = (merged["pct"] * merged["net"]).sum() / merged["net"].sum()
+                    w_rows.append({
+                        "Channel": lbl,
+                        "Gew. Ø Diff %": round(w, 1),
+                        "Ø Diff % (ungew.)": round(sub["pct"].mean(), 1),
+                        "Umsatzbasis €": round(merged["net"].sum(), 0),
+                        "PZNs (mit Umsatz)": len(merged),
+                    })
+                st.dataframe(
+                    pd.DataFrame(w_rows), use_container_width=True, hide_index=True,
+                    column_config={
+                        "Gew. Ø Diff %": st.column_config.NumberColumn(format="%.1f %%"),
+                        "Ø Diff % (ungew.)": st.column_config.NumberColumn(format="%.1f %%"),
+                        "Umsatzbasis €": st.column_config.NumberColumn(format="%.0f €"),
+                        "PZNs (mit Umsatz)": st.column_config.NumberColumn(format="%d"),
+                    },
+                )
+                st.caption(
+                    f"Gewichtung mit Netto-Umsatz je Channel aus Orderlines "
+                    f"({w_von:%d.%m.%Y} – {w_bis:%d.%m.%Y}). "
+                    "Je Channel zählen nur PZNs mit Channel- und Quote-Preis sowie Umsatz auf diesem Channel."
+                )
+
             st.divider()
 
             # ── Cluster-Übersicht: Ø prozentuale Differenz Channel vs. Quote je Cluster ──
