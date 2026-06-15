@@ -153,7 +153,7 @@ drive = verbinde_drive()
 
 import pricing_lib as pl
 from pricing_lib import (
-    CHANNEL_COLS, CHANNEL_LABELS, PRICE_EDGES, PRICE_LABELS,
+    CHANNEL_COLS, CHANNEL_LABELS, MASTER_CHANNEL_COLS, PRICE_EDGES, PRICE_LABELS,
     parse_date_from_filename, parse_quote_bytes, parse_channel_bytes,
     parse_master_bytes, assign_price_cluster, fmt_date,
 )
@@ -187,6 +187,14 @@ def list_snapshots(_drive):
 @st.cache_data(ttl=60, show_spinner="Snapshot wird geladen …")
 def load_snapshot(_drive, iso_datum: str):
     return pl.load_snapshot(_drive, iso_datum)
+
+@st.cache_data(ttl=60, show_spinner="Masterdatei wird geladen …")
+def load_master(_drive, iso_datum: str):
+    return pl.load_master(_drive, iso_datum)
+
+@st.cache_data(ttl=60, show_spinner="Channel-Preise werden geladen …")
+def load_channel(_drive, iso_datum: str):
+    return pl.load_channel(_drive, iso_datum)
 
 
 # ─── Seiteninhalt ──────────────────────────────────────────────────────────────
@@ -276,8 +284,8 @@ with st.sidebar:
         } for k, v in _snaps.items()]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-tab_snap, tab_cmp, tab_sales = st.tabs(
-    ["📊 Momentaufnahme", "🔀 Vergleich", "🛒 Abverkauf"]
+tab_snap, tab_cmp, tab_master, tab_sales = st.tabs(
+    ["📊 Momentaufnahme", "🔀 Vergleich", "🗂️ Masterdatei-Analyse", "🛒 Abverkauf"]
 )
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -555,7 +563,137 @@ with tab_cmp:
                 )
 
 # ════════════════════════════════════════════════════════════════════════════════
-# TAB 3 – Abverkauf (später)
+# TAB 3 – Masterdatei-Analyse (Abgleich Master-Channelpreise vs. Channel-Snapshot)
+# ════════════════════════════════════════════════════════════════════════════════
+with tab_master:
+    snaps = list_snapshots(drive)
+    vergleichbar = {k: v for k, v in snaps.items() if v.get("master_id") and v.get("channel_id")}
+    if not vergleichbar:
+        st.info(
+            "Für keinen Zeitpunkt liegen Master- **und** Channel-Datei vor. "
+            "Beide werden für den Abgleich benötigt (Upload links in der Seitenleiste)."
+        )
+    else:
+        keys_m = list(vergleichbar.keys())
+        cm1, cm2 = st.columns([1, 1])
+        with cm1:
+            sel_m = st.selectbox("Zeitpunkt", keys_m, index=len(keys_m) - 1,
+                                 format_func=fmt_date, key="ma_sel")
+        with cm2:
+            toleranz = st.number_input(
+                "Toleranz für „abweichend“ (€)", min_value=0.0, max_value=1.0,
+                value=0.01, step=0.01, format="%.2f", key="ma_tol",
+                help="Abweichungen unterhalb dieses Betrags gelten als Übereinstimmung (Rundung).",
+            )
+
+        master = load_master(drive, sel_m)
+        channel = load_channel(drive, sel_m)
+
+        if master.empty or channel.empty:
+            st.warning("Master- oder Channel-Daten für diesen Zeitpunkt konnten nicht geladen werden.")
+        else:
+            info_cols = [c for c in ["title", "manufacturer"] if c in master.columns]
+            m = master[["productId"] + MASTER_CHANNEL_COLS + info_cols].merge(
+                channel[["productId"] + CHANNEL_COLS], on="productId", how="inner"
+            )
+
+            # Long-Format: je Produkt × Channel ein Master/Snapshot-Paar
+            teile = []
+            for mc, sc, lbl in zip(MASTER_CHANNEL_COLS, CHANNEL_COLS, CHANNEL_LABELS):
+                sub = m[["productId"] + info_cols + [mc, sc]].copy()
+                sub = sub.rename(columns={mc: "master", sc: "snapshot"})
+                sub["Channel"] = lbl
+                teile.append(sub)
+            long = pd.concat(teile, ignore_index=True)
+
+            both = long[long["master"].notna() & long["snapshot"].notna()].copy()
+            both["diff"] = both["master"] - both["snapshot"]
+            both["pct"] = both["diff"] / both["snapshot"] * 100
+            both["abweichend"] = both["diff"].abs() >= toleranz
+
+            # KPIs gesamt
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Produkte (in beiden)", f"{m['productId'].nunique():,}".replace(",", "."))
+            k2.metric("Preis-Paare verglichen", f"{len(both):,}".replace(",", "."))
+            k3.metric("Übereinstimmend", f"{int((~both['abweichend']).sum()):,}".replace(",", "."))
+            k4.metric("Abweichend", f"{int(both['abweichend'].sum()):,}".replace(",", "."))
+
+            st.divider()
+
+            # Zusammenfassung je Channel
+            st.markdown("##### Abgleich je Channel")
+            g = both.groupby("Channel", observed=False)
+            summary = pd.DataFrame({
+                "Verglichen": g.size(),
+                "Übereinstimmend": g["abweichend"].apply(lambda s: int((~s).sum())),
+                "Abweichend": g["abweichend"].sum().astype(int),
+                "Ø Δ €": g["diff"].mean().round(3),
+                "Max |Δ| €": g["diff"].abs().max().round(2),
+            }).reindex(CHANNEL_LABELS).reset_index().rename(columns={"index": "Channel"})
+            summary["Abweichend %"] = (summary["Abweichend"] / summary["Verglichen"] * 100).round(1)
+            st.dataframe(
+                summary, use_container_width=True, hide_index=True,
+                column_config={
+                    "Verglichen": st.column_config.NumberColumn(format="%d"),
+                    "Übereinstimmend": st.column_config.NumberColumn(format="%d"),
+                    "Abweichend": st.column_config.NumberColumn(format="%d"),
+                    "Abweichend %": st.column_config.NumberColumn(format="%.1f %%"),
+                    "Ø Δ €": st.column_config.NumberColumn(format="%.3f €"),
+                    "Max |Δ| €": st.column_config.NumberColumn(format="%.2f €"),
+                },
+            )
+            st.caption("Δ = Masterpreis − Snapshot-Preis (Momentaufnahme). Positiv = Master teurer.")
+
+            st.divider()
+
+            # Abweichungen im Detail
+            st.markdown("##### Abweichungen im Detail")
+            fc1, fc2 = st.columns([1, 2])
+            with fc1:
+                nur_abw = st.toggle("Nur Abweichungen", value=True, key="ma_nur")
+            with fc2:
+                ch_filter = st.multiselect("Channel filtern", CHANNEL_LABELS,
+                                           default=CHANNEL_LABELS, key="ma_chfilter")
+
+            tab = both[both["Channel"].isin(ch_filter)].copy()
+            if nur_abw:
+                tab = tab[tab["abweichend"]]
+
+            if tab.empty:
+                st.success("Keine Abweichungen für diese Auswahl. Master- und Snapshot-Preise stimmen überein.")
+            else:
+                tab = tab.reindex(tab["diff"].abs().sort_values(ascending=False).index)
+                out = tab[["productId"] + info_cols + ["Channel", "master", "snapshot", "diff", "pct"]].copy()
+                for c in ["master", "snapshot", "diff"]:
+                    out[c] = out[c].round(2)
+                out["pct"] = out["pct"].round(1)
+                out = out.rename(columns={
+                    "productId": "PZN", "title": "Titel", "manufacturer": "Hersteller",
+                    "master": "Master", "snapshot": "Snapshot", "diff": "Δ €", "pct": "Δ %",
+                })
+                st.caption(f"{len(out):,} Zeilen".replace(",", "."))
+                st.dataframe(
+                    out, use_container_width=True, hide_index=True,
+                    column_config={
+                        "Master": st.column_config.NumberColumn(format="%.2f €"),
+                        "Snapshot": st.column_config.NumberColumn(format="%.2f €"),
+                        "Δ €": st.column_config.NumberColumn(format="%.2f €"),
+                        "Δ %": st.column_config.NumberColumn(format="%.1f %%"),
+                    },
+                )
+                buf = io.BytesIO()
+                with pd.ExcelWriter(buf, engine="openpyxl") as w:
+                    summary.to_excel(w, index=False, sheet_name="Zusammenfassung")
+                    out.to_excel(w, index=False, sheet_name="Abweichungen")
+                st.download_button(
+                    "📥 Abgleich als Excel",
+                    data=buf.getvalue(),
+                    file_name=f"masterabgleich_{sel_m}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+
+# ════════════════════════════════════════════════════════════════════════════════
+# TAB 4 – Abverkauf (später)
 # ════════════════════════════════════════════════════════════════════════════════
 with tab_sales:
     st.subheader("Abverkaufsdaten")
