@@ -358,11 +358,13 @@ with tab_snap:
 
             st.divider()
 
-            # ── Channel-Vergleich gesamt ──
+            # ── Channel-Vergleich gesamt (nur PZNs mit Channel- UND Quote-Preis) ──
             st.markdown("##### Channel-Preise im Vergleich zum Quote-Preis")
+            st.caption("Nur PZNs, die sowohl einen Channel- als auch einen Quote-Preis haben "
+                       "(= Spalte „Abdeckung“).")
             ch_rows = []
             for c, lbl in zip(CHANNEL_COLS, CH_LABELS):
-                sub = df[df[c].notna()]
+                sub = df[df[c].notna() & df["quote"].notna()]
                 if sub.empty:
                     ch_rows.append({"Channel": lbl, "Abdeckung": 0, "Ø Preis": None,
                                     "Ø Diff zu Quote": None, "Ø Diff %": None, "Anteil < Quote": None})
