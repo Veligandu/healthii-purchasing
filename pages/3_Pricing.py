@@ -590,33 +590,44 @@ with tab_cmp:
                 st.caption(f"Vergleich {metrik}: {fmt_date(von)} → {fmt_date(bis)}")
                 st.divider()
 
-                # ── Veränderung je Preis-Cluster ──
+                # ── Veränderung je Preis-Cluster (inkl. umsatzgewichtet) ──
                 st.markdown("##### Veränderung je Preis-Cluster")
-                beide["_up"] = beide["pct"] > 0.02
-                beide["_down"] = beide["pct"] < -0.02
+
+                # Umsatz je PZN für die gewählte Preisreihe (ref=col), 30 Tage vor dem neueren Datum
+                ol_all = load_orderlines(drive)
+                w_bis = pd.Timestamp(bis)
+                w_von = w_bis - pd.Timedelta(days=30)
+                rev = pd.Series(dtype=float)
+                if not ol_all.empty:
+                    olw = ol_all.copy()
+                    olw["ref"] = olw["source"].map(lambda s: ref_for_source(s, source_map))
+                    olw["d"] = pd.to_datetime(olw["date"], errors="coerce")
+                    olw = olw[(olw["d"] > w_von) & (olw["d"] <= w_bis) & (olw["ref"] == col)]
+                    rev = olw.groupby("productId")["net"].sum()
+                beide["_rev"] = beide["productId"].map(rev).fillna(0.0)
+                beide["_pw"] = beide["pct"] * beide["_rev"]
+
                 g = beide.groupby("Cluster", observed=False)
+                rsum = g["_rev"].sum()
+                wmean = (g["_pw"].sum() / rsum.replace(0, pd.NA)) * 100
                 cl = pd.DataFrame({
                     "Anzahl": g.size(),
-                    "Ø Preis vorher": g["preis_a"].mean().round(2),
-                    "Ø Preis nachher": g["preis_b"].mean().round(2),
                     "Ø Änderung %": (g["pct"].mean() * 100).round(1),
-                    "gestiegen": g["_up"].sum().astype(int),
-                    "gesunken": g["_down"].sum().astype(int),
+                    "Ø Änderung % (umsatzgew.)": wmean.round(1),
                 }).reset_index()
                 st.dataframe(
                     cl, use_container_width=True, hide_index=True,
                     column_config={
                         "Anzahl": st.column_config.NumberColumn(format="%d"),
-                        "Ø Preis vorher": st.column_config.NumberColumn(format="%.2f €"),
-                        "Ø Preis nachher": st.column_config.NumberColumn(format="%.2f €"),
                         "Ø Änderung %": st.column_config.NumberColumn(format="%.1f %%"),
+                        "Ø Änderung % (umsatzgew.)": st.column_config.NumberColumn(format="%.1f %%"),
                     },
                 )
-
-                # ── Verteilung der Veränderungs-Cluster ──
-                st.markdown("##### Verteilung der Preisänderungen")
-                vt = beide["Veränderung"].value_counts().reindex(CHANGE_ORDER).fillna(0)
-                st.bar_chart(vt, color="#0D9488")
+                st.caption(
+                    f"Nur PZNs mit Preis in beiden Zeitpunkten. Umsatzgewichtung mit Netto-Umsatz "
+                    f"({metrik}) der 30 Tage vor dem neueren Datum "
+                    f"({(w_von + pd.Timedelta(days=1)):%d.%m.%Y} – {w_bis:%d.%m.%Y})."
+                )
 
                 st.divider()
 
