@@ -1019,41 +1019,41 @@ with tab_sales:
                 f"· {ol['date'].nunique()} Tage".replace(",", ".")
             )
 
-            # Kalender-Monatsansicht
+            # Kalender-Jahresansicht (alle 12 Monate)
             st.markdown("##### Vorhandene Tage")
-            monate = sorted({(d.year, d.month) for d in d_all}, reverse=True)
-            sel_m = st.selectbox(
-                "Monat", monate, index=0,
-                format_func=lambda ym: f"{calendar.month_name[ym[1]]} {ym[0]}", key="ol_cal_m",
-            )
-            jahr, monat = sel_m
+            jahre = sorted({d.year for d in d_all}, reverse=True)
+            jahr = st.selectbox("Jahr", jahre, index=0, key="ol_cal_y")
             counts = {k: int(v) for k, v in tage.items()}
-            head = "".join(f"<th style='padding:4px;color:#6B7280;font-size:11px;font-weight:600'>{d}</th>"
-                           for d in ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"])
-            body = ""
-            for wk in calendar.Calendar(firstweekday=0).monthdayscalendar(jahr, monat):
-                cells = ""
-                for day in wk:
-                    if day == 0:
-                        cells += "<td></td>"
-                        continue
-                    iso = f"{jahr:04d}-{monat:02d}-{day:02d}"
-                    n = counts.get(iso, 0)
-                    if n > 0:
-                        cells += (f"<td style='padding:6px;text-align:center;background:#CCFBF1;"
-                                  f"border:1px solid #99F6E4;border-radius:6px'>"
-                                  f"<div style='font-weight:600;color:#0F766E'>{day}</div>"
-                                  f"<div style='font-size:10px;color:#0D9488'>{n:,}</div></td>".replace(",", "."))
-                    else:
-                        cells += (f"<td style='padding:6px;text-align:center;color:#9CA3AF;"
-                                  f"border:1px solid #F3F4F6'>{day}</td>")
-                body += f"<tr>{cells}</tr>"
-            st.markdown(
-                f"<table style='border-collapse:separate;border-spacing:3px;width:100%'>"
-                f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>",
-                unsafe_allow_html=True,
-            )
-            st.caption("Eingefärbte Tage enthalten Daten (Zahl = Anzahl Orderlines).")
+
+            def _month_html(year, month):
+                head = "".join(f"<th style='padding:2px;color:#9CA3AF;font-size:9px;font-weight:600'>{d}</th>"
+                               for d in ["M", "D", "M", "D", "F", "S", "S"])
+                body = ""
+                for wk in calendar.Calendar(firstweekday=0).monthdayscalendar(year, month):
+                    cells = ""
+                    for day in wk:
+                        if day == 0:
+                            cells += "<td></td>"
+                            continue
+                        n = counts.get(f"{year:04d}-{month:02d}-{day:02d}", 0)
+                        if n > 0:
+                            cells += (f"<td title='{n} Orderlines' style='padding:3px;text-align:center;"
+                                      f"font-size:10px;font-weight:600;background:#CCFBF1;color:#0F766E;"
+                                      f"border:1px solid #99F6E4;border-radius:4px'>{day}</td>")
+                        else:
+                            cells += (f"<td style='padding:3px;text-align:center;font-size:10px;"
+                                      f"color:#D1D5DB'>{day}</td>")
+                    body += f"<tr>{cells}</tr>"
+                return (f"<div style='font-weight:600;font-size:12px;color:#374151;margin-bottom:4px'>"
+                        f"{calendar.month_name[month]}</div>"
+                        f"<table style='border-collapse:separate;border-spacing:2px'>"
+                        f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
+
+            for row_start in range(1, 13, 4):  # 3 Zeilen à 4 Monate
+                mcols = st.columns(4)
+                for i, month in enumerate(range(row_start, min(row_start + 4, 13))):
+                    mcols[i].markdown(_month_html(jahr, month), unsafe_allow_html=True)
+            st.caption("Eingefärbte Tage enthalten Daten (Tooltip = Anzahl Orderlines).")
 
             # Zeitraum löschen
             st.divider()
