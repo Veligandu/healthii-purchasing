@@ -1408,14 +1408,22 @@ with tab4:
     else:
         @st.cache_data(ttl=60, show_spinner=False)
         def lade_archiv_liste(_drive):
-            """Listet alle Purchase-Order Dateien aus Drive."""
-            results = _drive.files().list(
-                q="name contains 'Purchase-Order' and trashed=false",
-                fields="files(id, name, modifiedTime)",
-                orderBy="modifiedTime desc",
-                pageSize=50,
-            ).execute()
-            return results.get("files", [])
+            """Listet alle Purchase-Order Dateien aus Drive (mit Retry bei Netzwerkfehlern)."""
+            import time as _t
+            _last = None
+            for _versuch in range(3):
+                try:
+                    results = _drive.files().list(
+                        q="name contains 'Purchase-Order' and trashed=false",
+                        fields="files(id, name, modifiedTime)",
+                        orderBy="modifiedTime desc",
+                        pageSize=50,
+                    ).execute()
+                    return results.get("files", [])
+                except Exception as _e:
+                    _last = _e
+                    _t.sleep(1)
+            raise _last
 
         def lade_purchase_order(_drive, file_id):
             """Lädt eine Purchase-Order Excel aus Drive und gibt einen DataFrame zurück."""
@@ -1433,7 +1441,11 @@ with tab4:
                 df = df[df["PZN"].notna() & (df["PZN"].astype(str).str.strip() != "")]
             return df
 
-        dateien = lade_archiv_liste(drive)
+        try:
+            dateien = lade_archiv_liste(drive)
+        except Exception as _e:
+            dateien = []
+            st.warning(f"Archiv konnte nicht geladen werden (Netzwerkfehler). Bitte Seite neu laden. — {_e}")
 
         if not dateien:
             st.info("Noch keine Purchase-Orders in Drive archiviert.")
