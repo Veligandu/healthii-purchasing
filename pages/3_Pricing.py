@@ -897,12 +897,6 @@ with tab_sales:
                     pth = st.slider("Min. Preisänderung %", 0, 50, 5, key="ab_pth")
                 with c4:
                     qth = st.slider("Min. Mengenänderung %", 0, 90, 30, key="ab_qth")
-                richtung = st.radio(
-                    "Ansicht",
-                    ["Verluste (Preis ↑ → Menge ↓)", "Gewinne (Preis ↓ → Menge ↑)"],
-                    horizontal=True, key="ab_richtung",
-                )
-                ist_verlust = richtung.startswith("Verluste")
 
                 if von >= bis:
                     st.warning("„Preis vorher“ muss vor „Preis nachher“ liegen.")
@@ -945,33 +939,40 @@ with tab_sales:
                                      on=["productId", "ref"], how="inner")
                     res["Produkt"] = res["productId"].map(namen)
 
-                    if ist_verlust:
-                        sig = res[(res["preis_pct"] >= pth) & (res["qty_pct"] <= -qth)].copy()
-                        eff_units, eff_net = "lost_units", "lost_net"
-                        lbl_units, lbl_net = "Verlust Stk.", "Verlust € (netto)"
-                        kpi_units, kpi_net = "Verlorene Einheiten (gesch.)", "Verlorener Umsatz (gesch.)"
-                        leer = "Keine signifikanten Abverkaufsverluste durch Preiserhöhungen für diese Auswahl."
-                    else:
-                        sig = res[(res["preis_pct"] <= -pth) & (res["qty_pct"] >= qth)].copy()
-                        eff_units, eff_net = "gained_units", "gained_net"
-                        lbl_units, lbl_net = "Mehrabsatz Stk.", "Mehrumsatz € (netto)"
-                        kpi_units, kpi_net = "Gewonnene Einheiten (gesch.)", "Mehrumsatz (gesch.)"
-                        leer = "Keine signifikanten Mengenzuwächse durch Preissenkungen für diese Auswahl."
-                    sig = sig.sort_values(eff_net, ascending=False)
-
                     st.caption(
                         f"Fenster: vorher {before_days} Tage (ab {fmt_date(von)}) · "
                         f"nachher {after_days} Tage (ab {fmt_date(bis)}). "
                         "Mengen als Ø/Tag normiert."
                     )
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("Betroffene Produkte/Reihen", f"{len(sig):,}".replace(",", "."))
-                    m2.metric(kpi_units, f"{int(sig[eff_units].sum()):,}".replace(",", "."))
-                    m3.metric(kpi_net, f"{sig[eff_net].sum():,.0f} €".replace(",", "."))
 
-                    if sig.empty:
-                        st.success(leer)
-                    else:
+                    def render_wirkung(verlust):
+                        if verlust:
+                            sig = res[(res["preis_pct"] >= pth) & (res["qty_pct"] <= -qth)].copy()
+                            eff_units, eff_net = "lost_units", "lost_net"
+                            lbl_units, lbl_net = "Verlust Stk.", "Verlust € (netto)"
+                            kpi_units, kpi_net = "Verlorene Einheiten (gesch.)", "Verlorener Umsatz (gesch.)"
+                            titel = "📉 Verluste – Preiserhöhung → Mengenrückgang"
+                            leer = "Keine signifikanten Abverkaufsverluste durch Preiserhöhungen für diese Auswahl."
+                            tag = "verluste"
+                        else:
+                            sig = res[(res["preis_pct"] <= -pth) & (res["qty_pct"] >= qth)].copy()
+                            eff_units, eff_net = "gained_units", "gained_net"
+                            lbl_units, lbl_net = "Mehrabsatz Stk.", "Mehrumsatz € (netto)"
+                            kpi_units, kpi_net = "Gewonnene Einheiten (gesch.)", "Mehrumsatz (gesch.)"
+                            titel = "📈 Gewinne – Preissenkung → Mengenzuwachs"
+                            leer = "Keine signifikanten Mengenzuwächse durch Preissenkungen für diese Auswahl."
+                            tag = "gewinne"
+
+                        st.markdown(f"##### {titel}")
+                        sig = sig.sort_values(eff_net, ascending=False)
+                        m1, m2, m3 = st.columns(3)
+                        m1.metric("Betroffene Produkte/Reihen", f"{len(sig):,}".replace(",", "."))
+                        m2.metric(kpi_units, f"{int(sig[eff_units].sum()):,}".replace(",", "."))
+                        m3.metric(kpi_net, f"{sig[eff_net].sum():,.0f} €".replace(",", "."))
+
+                        if sig.empty:
+                            st.info(leer)
+                            return
                         out = sig[["productId", "Produkt", "ref", "preis_vorher", "preis_nachher",
                                    "preis_pct", "vor_rate", "nach_rate", "qty_pct", eff_units, eff_net]].copy()
                         out["ref"] = out["ref"].map(lambda r: ref_label(r, cfg))
@@ -1003,11 +1004,14 @@ with tab_sales:
                         buf = io.BytesIO()
                         with pd.ExcelWriter(buf, engine="openpyxl") as w:
                             out.to_excel(w, index=False, sheet_name="Preiswirkung")
-                        tag = "verluste" if ist_verlust else "gewinne"
                         st.download_button(
                             "📥 Als Excel", data=buf.getvalue(),
-                            file_name=f"abverkauf_preiswirkung_{tag}_{von}_{bis}.xlsx", key="ab_dl_b",
+                            file_name=f"abverkauf_preiswirkung_{tag}_{von}_{bis}.xlsx", key=f"ab_dl_{tag}",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+                    render_wirkung(True)
+                    st.divider()
+                    render_wirkung(False)
 
     # ── Orderlines verwalten: Upload (Modus), Löschen, Kalenderansicht ──────────
     with sub_data:
