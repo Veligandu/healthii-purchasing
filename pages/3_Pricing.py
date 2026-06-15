@@ -149,15 +149,14 @@ def verbinde_drive():
 
 drive = verbinde_drive()
 
-# ─── Konstanten ────────────────────────────────────────────────────────────────
+# ─── Gemeinsame Logik (pricing_lib) ─────────────────────────────────────────────
 
-PRICING_FOLDER_NAME = "Pricing"
-CHANNEL_COLS = ["channelPrice1", "channelPrice2", "channelPrice3", "channelPrice4", "channelPrice5"]
-CHANNEL_LABELS = ["Channel 1", "Channel 2", "Channel 3", "Channel 4", "Channel 5"]
-
-# Preis-Cluster nach Preishöhe (EUR)
-PRICE_EDGES = [0, 10, 25, 50, 100, float("inf")]
-PRICE_LABELS = ["0–10 €", "10–25 €", "25–50 €", "50–100 €", "100+ €"]
+import pricing_lib as pl
+from pricing_lib import (
+    CHANNEL_COLS, CHANNEL_LABELS, PRICE_EDGES, PRICE_LABELS,
+    parse_date_from_filename, parse_quote_bytes, parse_channel_bytes,
+    parse_master_bytes, assign_price_cluster, fmt_date,
+)
 
 # Veränderungs-Cluster (prozentuale Preisänderung zwischen zwei Zeitpunkten)
 def change_cluster(pct):
@@ -175,128 +174,19 @@ def change_cluster(pct):
 
 CHANGE_ORDER = ["stark gestiegen", "gestiegen", "stabil", "gesunken", "stark gesunken"]
 
-# ─── Drive: Ordner / Snapshots ─────────────────────────────────────────────────
-
-def _waehle_ordner(_drive, files):
-    """Bei mehreren gleichnamigen Ordnern: den mit Inhalt bevorzugen, sonst den ältesten."""
-    if len(files) == 1:
-        return files[0]["id"]
-    for f in files:
-        kids = _drive.files().list(
-            q=f"'{f['id']}' in parents and trashed=false",
-            fields="files(id)", pageSize=1,
-        ).execute(num_retries=3).get("files", [])
-        if kids:
-            return f["id"]
-    return files[0]["id"]
-
-
+# Cache-Wrapper um die Drive-Zugriffe (Verbindung wird pro Rerun neu aufgebaut,
+# deshalb _drive nicht als Cache-Key verwenden → führender Unterstrich)
 @st.cache_data(ttl=120, show_spinner=False)
 def get_pricing_folder_id(_drive):
-    """ID des Ordners 'Pricing' (legt ihn an falls nötig)."""
-    q = (f"name='{PRICING_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' "
-         f"and trashed=false")
-    res = _drive.files().list(q=q, fields="files(id)", orderBy="createdTime",
-                              pageSize=10).execute(num_retries=3)
-    files = res.get("files", [])
-    if files:
-        return _waehle_ordner(_drive, files)
-    folder = _drive.files().create(
-        body={"name": PRICING_FOLDER_NAME, "mimeType": "application/vnd.google-apps.folder"},
-        fields="id",
-    ).execute(num_retries=3)
-    return folder["id"]
-
-
-def parse_date_from_filename(filename: str):
-    """Erkennt das Datum DDMMYY am Ende des Dateinamens (z. B. quote_prices_110626.csv → 11.06.2026)."""
-    m = re.search(r"(\d{2})(\d{2})(\d{2})(?:\.csv)?$", filename)
-    if not m:
-        return None
-    d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
-    try:
-        return date(2000 + y, mo, d)
-    except ValueError:
-        return None
-
-
-def _download_bytes(_drive, file_id):
-    from googleapiclient.http import MediaIoBaseDownload
-    buf = io.BytesIO()
-    dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=file_id))
-    done = False
-    while not done:
-        _, done = dl.next_chunk(num_retries=3)
-    buf.seek(0)
-    return buf.getvalue()
-
+    return pl.get_pricing_folder_id(_drive)
 
 @st.cache_data(ttl=60, show_spinner=False)
 def list_snapshots(_drive):
-    """Listet alle in Drive gespeicherten Snapshots.
-    Rückgabe: dict {iso_datum: {quote_id, channel_id}} – sortiert."""
-    folder_id = get_pricing_folder_id(_drive)
-    res = _drive.files().list(
-        q=f"'{folder_id}' in parents and trashed=false",
-        fields="files(id, name)", pageSize=1000,
-    ).execute(num_retries=3)
-    snaps = {}
-    for f in res.get("files", []):
-        d = parse_date_from_filename(f["name"])
-        if d is None:
-            continue
-        key = d.isoformat()
-        entry = snaps.setdefault(key, {"quote_id": None, "channel_id": None})
-        if f["name"].lower().startswith("quote"):
-            entry["quote_id"] = f["id"]
-        elif f["name"].lower().startswith("channel"):
-            entry["channel_id"] = f["id"]
-    return dict(sorted(snaps.items()))
-
-
-def parse_quote_bytes(data: bytes) -> pd.DataFrame:
-    """quote_prices CSV → DataFrame[productId, quote] (Preis in EUR)."""
-    df = pd.read_csv(io.BytesIO(data), sep="|", dtype={"productId": str})
-    df.columns = df.columns.str.strip()
-    df = df.rename(columns={"quote_price": "quote"})
-    df["quote"] = pd.to_numeric(df["quote"], errors="coerce") / 100.0
-    df = df[(df["quote"].notna()) & (df["quote"] > 0)]
-    return df[["productId", "quote"]].drop_duplicates("productId")
-
-
-def parse_channel_bytes(data: bytes) -> pd.DataFrame:
-    """channel_prices CSV → DataFrame[productId, channelPrice1..5] (Preise in EUR)."""
-    df = pd.read_csv(io.BytesIO(data), sep="|", dtype={"productId": str})
-    df.columns = df.columns.str.strip()
-    for c in CHANNEL_COLS:
-        if c not in df.columns:
-            df[c] = pd.NA
-        df[c] = pd.to_numeric(df[c], errors="coerce") / 100.0
-        df.loc[df[c] <= 0, c] = pd.NA
-    return df[["productId"] + CHANNEL_COLS].drop_duplicates("productId")
-
+    return pl.list_snapshots(_drive)
 
 @st.cache_data(ttl=60, show_spinner="Snapshot wird geladen …")
-def load_snapshot(_drive, iso_datum: str) -> pd.DataFrame:
-    """Lädt Quote- und Channel-Preise eines Zeitpunkts und merged sie auf productId."""
-    snaps = list_snapshots(_drive)
-    entry = snaps.get(iso_datum)
-    if not entry:
-        return pd.DataFrame()
-    quote_df = parse_quote_bytes(_download_bytes(_drive, entry["quote_id"])) if entry["quote_id"] else \
-        pd.DataFrame(columns=["productId", "quote"])
-    chan_df = parse_channel_bytes(_download_bytes(_drive, entry["channel_id"])) if entry["channel_id"] else \
-        pd.DataFrame(columns=["productId"] + CHANNEL_COLS)
-    merged = quote_df.merge(chan_df, on="productId", how="outer")
-    return merged
-
-
-def assign_price_cluster(series_eur: pd.Series) -> pd.Series:
-    return pd.cut(series_eur, bins=PRICE_EDGES, labels=PRICE_LABELS, right=False)
-
-
-def fmt_date(iso: str) -> str:
-    return datetime.fromisoformat(iso).strftime("%d.%m.%Y")
+def load_snapshot(_drive, iso_datum: str):
+    return pl.load_snapshot(_drive, iso_datum)
 
 
 # ─── Seiteninhalt ──────────────────────────────────────────────────────────────
@@ -313,14 +203,15 @@ if drive is None:
 # ════════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.header("📥 Preise hochladen")
-    st.caption("Quote- und Channel-Preisdatei eines Zeitpunkts. Datum wird aus dem Dateinamen erkannt.")
+    st.caption("Quote-, Channel- und Masterdatei eines Zeitpunkts. Datum wird aus dem Dateinamen erkannt.")
 
     quote_file = st.file_uploader("Quote-Preise (CSV)", type=["csv"], key="up_quote")
     channel_file = st.file_uploader("Channel-Preise (CSV)", type=["csv"], key="up_channel")
+    master_file = st.file_uploader("Masterdatei (CSV)", type=["csv"], key="up_master")
 
     # Datum vorbelegen aus Dateinamen
     erkanntes_datum = None
-    for f in (quote_file, channel_file):
+    for f in (quote_file, channel_file, master_file):
         if f is not None:
             erkanntes_datum = parse_date_from_filename(f.name) or erkanntes_datum
 
@@ -343,9 +234,16 @@ with st.sidebar:
             st.caption("Abdeckung: " + " · ".join(f"{k}: {v:,}".replace(",", ".") for k, v in abdeckung.items()))
         except Exception as e:
             st.error(f"Channel-Datei nicht lesbar: {e}")
+    master_reduced = None
+    if master_file is not None:
+        try:
+            master_reduced = parse_master_bytes(master_file.getvalue())
+            st.success(f"Master: {len(master_reduced):,} Produkte".replace(",", "."))
+        except Exception as e:
+            st.error(f"Masterdatei nicht lesbar: {e}")
 
     if st.button("💾 In Drive speichern", type="primary", use_container_width=True,
-                 disabled=(quote_file is None and channel_file is None)):
+                 disabled=(quote_file is None and channel_file is None and master_file is None)):
         folder_id = get_pricing_folder_id(drive)
         ddmmyy = snap_datum.strftime("%d%m%y")
         gespeichert = []
@@ -355,6 +253,10 @@ with st.sidebar:
         if channel_file is not None:
             upload_bytes_to_drive(drive, channel_file.getvalue(), f"channel_prices_{ddmmyy}.csv", folder_id, "text/csv")
             gespeichert.append("Channel-Preise")
+        if master_file is not None and master_reduced is not None:
+            master_csv = master_reduced.to_csv(index=False).encode("utf-8")
+            upload_bytes_to_drive(drive, master_csv, f"master_{ddmmyy}.csv", folder_id, "text/csv")
+            gespeichert.append("Masterdatei")
         list_snapshots.clear()
         load_snapshot.clear()
         st.success(f"Gespeichert ({snap_datum.strftime('%d.%m.%Y')}): {', '.join(gespeichert)}")
@@ -370,6 +272,7 @@ with st.sidebar:
             "Datum": fmt_date(k),
             "Quote": "✅" if v["quote_id"] else "—",
             "Channel": "✅" if v["channel_id"] else "—",
+            "Master": "✅" if v.get("master_id") else "—",
         } for k, v in _snaps.items()]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
