@@ -150,8 +150,12 @@ def verbinde_drive():
 drive = verbinde_drive()
 
 # ─── Gemeinsame Logik (pricing_lib) ─────────────────────────────────────────────
-
+# importlib.reload erzwingt das Neu-Einlesen von pricing_lib: Streamlit Cloud hält
+# importierte Hilfsmodule in sys.modules über Deploys hinweg im Cache, wodurch nach
+# Änderungen an pricing_lib sonst ein ImportError auftritt (alte Modulversion).
+import importlib
 import pricing_lib as pl
+importlib.reload(pl)
 from pricing_lib import (
     CHANNEL_COLS, CHANNEL_LABELS, MASTER_CHANNEL_COLS, PRICE_EDGES, PRICE_LABELS,
     ORDER_REFS, REF_QUOTE, SOURCE_TO_CHANNEL,
