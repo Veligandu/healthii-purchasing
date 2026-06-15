@@ -157,10 +157,11 @@ import importlib
 import pricing_lib as pl
 importlib.reload(pl)
 from pricing_lib import (
-    CHANNEL_COLS, CHANNEL_LABELS, MASTER_CHANNEL_COLS, PRICE_EDGES, PRICE_LABELS,
-    ORDER_REFS, REF_QUOTE, SOURCE_TO_CHANNEL,
+    CHANNEL_COLS, MASTER_CHANNEL_COLS, PRICE_EDGES, PRICE_LABELS,
+    REF_QUOTE, QUOTE_LABEL,
     parse_date_from_filename, parse_quote_bytes, parse_channel_bytes,
-    parse_master_bytes, parse_orderlines_bytes, ref_for_source, assign_price_cluster, fmt_date,
+    parse_master_bytes, parse_orderlines_bytes, ref_for_source, ref_label,
+    channel_label_list, assign_price_cluster, fmt_date,
 )
 
 # Veränderungs-Cluster (prozentuale Preisänderung zwischen zwei Zeitpunkten)
@@ -205,6 +206,10 @@ def load_channel(_drive, iso_datum: str):
 def load_orderlines(_drive):
     return pl.load_orderlines(_drive)
 
+@st.cache_data(ttl=60, show_spinner=False)
+def load_config(_drive):
+    return pl.load_config(_drive)
+
 
 # ─── Seiteninhalt ──────────────────────────────────────────────────────────────
 
@@ -214,6 +219,11 @@ st.caption("Preisanalyse – Quote-Preise vs. Channel-Preise, geclustert nach Pr
 if drive is None:
     st.error("Keine Verbindung zu Google Drive. Bitte Anmeldedaten prüfen.")
     st.stop()
+
+# Konfiguration: Channel-Anzeigenamen + Source-Zuordnung (persistent in Drive)
+cfg = load_config(drive)
+CH_LABELS = channel_label_list(cfg)          # Anzeigenamen, ausgerichtet an CHANNEL_COLS
+source_map = cfg["source_map"]
 
 # ════════════════════════════════════════════════════════════════════════════════
 # SIDEBAR – Preisdateien hochladen
@@ -246,7 +256,7 @@ with st.sidebar:
     if channel_file is not None:
         try:
             ch_prev = parse_channel_bytes(channel_file.getvalue())
-            abdeckung = {lbl: int(ch_prev[c].notna().sum()) for c, lbl in zip(CHANNEL_COLS, CHANNEL_LABELS)}
+            abdeckung = {lbl: int(ch_prev[c].notna().sum()) for c, lbl in zip(CHANNEL_COLS, CH_LABELS)}
             st.success(f"Channel: {len(ch_prev):,} Produkte".replace(",", "."))
             st.caption("Abdeckung: " + " · ".join(f"{k}: {v:,}".replace(",", ".") for k, v in abdeckung.items()))
         except Exception as e:
@@ -340,7 +350,7 @@ with tab_snap:
             # KPIs: Produktzahl Quote + Anzahl je Channel-Preis
             cols = st.columns(1 + len(CHANNEL_COLS))
             cols[0].metric("Produkte (Quote)", f"{len(df):,}".replace(",", "."))
-            for i, (c, lbl) in enumerate(zip(CHANNEL_COLS, CHANNEL_LABELS), start=1):
+            for i, (c, lbl) in enumerate(zip(CHANNEL_COLS, CH_LABELS), start=1):
                 cols[i].metric(lbl, f"{int(df[c].notna().sum()):,}".replace(",", "."))
 
             st.divider()
@@ -348,7 +358,7 @@ with tab_snap:
             # ── Channel-Vergleich gesamt ──
             st.markdown("##### Channel-Preise im Vergleich zum Quote-Preis")
             ch_rows = []
-            for c, lbl in zip(CHANNEL_COLS, CHANNEL_LABELS):
+            for c, lbl in zip(CHANNEL_COLS, CH_LABELS):
                 sub = df[df[c].notna()]
                 if sub.empty:
                     ch_rows.append({"Channel": lbl, "Abdeckung": 0, "Ø Preis": None,
@@ -385,14 +395,14 @@ with tab_snap:
                 tmp[c + "_pct"] = (tmp[c] - tmp["quote"]) / tmp["quote"] * 100
             g = tmp.groupby("Cluster", observed=False)
             cl = pd.DataFrame({"Anzahl": g.size()})
-            for c, lbl in zip(CHANNEL_COLS, CHANNEL_LABELS):
+            for c, lbl in zip(CHANNEL_COLS, CH_LABELS):
                 cl[lbl] = g[c + "_pct"].mean().round(1)
             cl = cl.reset_index()
             st.dataframe(
                 cl, use_container_width=True, hide_index=True,
                 column_config={
                     "Anzahl": st.column_config.NumberColumn(format="%d"),
-                    **{lbl: st.column_config.NumberColumn(format="%.1f %%") for lbl in CHANNEL_LABELS},
+                    **{lbl: st.column_config.NumberColumn(format="%.1f %%") for lbl in CH_LABELS},
                 },
             )
             st.caption("Negativ = Channel im Schnitt günstiger als Quote, positiv = teurer.")
@@ -419,7 +429,7 @@ with tab_snap:
                 value_vars=CHANNEL_COLS, var_name="ChannelCol", value_name="ChannelPreis",
             )
             long = long[long["ChannelPreis"].notna()].copy()
-            long["Channel"] = long["ChannelCol"].map(dict(zip(CHANNEL_COLS, CHANNEL_LABELS)))
+            long["Channel"] = long["ChannelCol"].map(dict(zip(CHANNEL_COLS, CH_LABELS)))
             long["pct"] = (long["ChannelPreis"] - long["quote"]) / long["quote"] * 100
 
             unter = long[long["pct"] < -schwelle].copy()
@@ -483,9 +493,9 @@ with tab_cmp:
         with c2:
             bis = st.selectbox("Bis", keys, index=len(keys) - 1, format_func=fmt_date, key="cmp_bis")
         with c3:
-            metrik = st.selectbox("Preisart", ["Quote"] + CHANNEL_LABELS, key="cmp_metrik")
+            metrik = st.selectbox("Preisart", ["Quote"] + CH_LABELS, key="cmp_metrik")
 
-        col_map = {"Quote": "quote", **{lbl: c for lbl, c in zip(CHANNEL_LABELS, CHANNEL_COLS)}}
+        col_map = {"Quote": "quote", **{lbl: c for lbl, c in zip(CH_LABELS, CHANNEL_COLS)}}
         col = col_map[metrik]
 
         if von == bis:
@@ -629,7 +639,7 @@ with tab_master:
 
             # Long-Format: je Produkt × Channel ein Master/Snapshot-Paar
             teile = []
-            for mc, sc, lbl in zip(MASTER_CHANNEL_COLS, CHANNEL_COLS, CHANNEL_LABELS):
+            for mc, sc, lbl in zip(MASTER_CHANNEL_COLS, CHANNEL_COLS, CH_LABELS):
                 sub = m[["productId"] + info_cols + [mc, sc]].copy()
                 sub = sub.rename(columns={mc: "master", sc: "snapshot"})
                 sub["Channel"] = lbl
@@ -660,7 +670,7 @@ with tab_master:
                 "Abweichend": g["abweichend"].sum().astype(int),
                 "Ø Δ €": g["diff"].mean().round(3),
                 "Max |Δ| €": g["absdiff"].max().round(2),
-            }).reindex(CHANNEL_LABELS).reset_index().rename(columns={"index": "Channel"})
+            }).reindex(CH_LABELS).reset_index().rename(columns={"index": "Channel"})
             summary["Abweichend %"] = (summary["Abweichend"] / summary["Verglichen"] * 100).round(1)
             st.dataframe(
                 summary, use_container_width=True, hide_index=True,
@@ -683,8 +693,8 @@ with tab_master:
             with fc1:
                 nur_abw = st.toggle("Nur Abweichungen", value=True, key="ma_nur")
             with fc2:
-                ch_filter = st.multiselect("Channel filtern", CHANNEL_LABELS,
-                                           default=CHANNEL_LABELS, key="ma_chfilter")
+                ch_filter = st.multiselect("Channel filtern", CH_LABELS,
+                                           default=CH_LABELS, key="ma_chfilter")
 
             tab = both[both["Channel"].isin(ch_filter)].copy()
             if nur_abw:
@@ -728,30 +738,36 @@ with tab_master:
 # ════════════════════════════════════════════════════════════════════════════════
 with tab_sales:
     ol = load_orderlines(drive)
-    if ol.empty:
-        st.info("Noch keine Orderlines vorhanden. Bitte links in der Seitenleiste hochladen.")
-    else:
+    if not ol.empty:
         ol = ol.copy()
-        ol["ref"] = ol["source"].map(ref_for_source)
+        ol["ref"] = ol["source"].map(lambda s: ref_for_source(s, source_map))
         ol["d"] = pd.to_datetime(ol["date"], errors="coerce")
         ol = ol[ol["d"].notna()]
-        dmin, dmax = ol["d"].min(), ol["d"].max()
-        st.caption(
-            f"Datenbasis: {len(ol):,} Orderlines · {dmin:%d.%m.%Y} – {dmax:%d.%m.%Y}".replace(",", ".")
-        )
         namen = ol.groupby("productId")["productname"].first()
 
-        sub_a, sub_b = st.tabs(["🏆 Rennerliste", "📉 Preisänderungs-Wirkung"])
+    sub_a, sub_b, sub_set = st.tabs(
+        ["🏆 Rennerliste", "📉 Preisänderungs-Wirkung", "⚙️ Einstellungen"]
+    )
 
-        # ── A) Rennerliste je Channel (nach Umsatz) ────────────────────────────
-        with sub_a:
+    # ── A) Rennerliste je Channel (nach Umsatz) ────────────────────────────────
+    with sub_a:
+        if ol.empty:
+            st.info("Noch keine Orderlines vorhanden. Bitte links in der Seitenleiste hochladen.")
+        else:
+            dmin, dmax = ol["d"].min(), ol["d"].max()
+            st.caption(
+                f"Datenbasis: {len(ol):,} Orderlines · {dmin:%d.%m.%Y} – {dmax:%d.%m.%Y}".replace(",", ".")
+            )
+            present_refs = [r for r in (CHANNEL_COLS + [REF_QUOTE]) if r in set(ol["ref"])]
+            label_to_ref = {ref_label(r, cfg): r for r in present_refs}
             fc1, fc2 = st.columns([1, 1])
             with fc1:
-                ch = st.selectbox("Channel", ["Alle Channels"] + ORDER_REFS, key="ab_rl_ch")
+                ch = st.selectbox("Channel", ["Alle Channels"] + list(label_to_ref.keys()),
+                                  key="ab_rl_ch")
             with fc2:
                 topn = st.slider("Top N", 10, 200, 50, step=10, key="ab_rl_n")
 
-            data = ol if ch == "Alle Channels" else ol[ol["ref"] == ch]
+            data = ol if ch == "Alle Channels" else ol[ol["ref"] == label_to_ref[ch]]
             renner = data.groupby("productId").agg(
                 Produkt=("productname", "first"),
                 Umsatz=("net", "sum"),
@@ -787,7 +803,10 @@ with tab_sales:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         # ── B) Preisänderungs-Wirkung ──────────────────────────────────────────
-        with sub_b:
+    with sub_b:
+        if ol.empty:
+            st.info("Noch keine Orderlines vorhanden. Bitte links in der Seitenleiste hochladen.")
+        else:
             snaps = list_snapshots(drive)
             price_snaps = [k for k, v in snaps.items() if v.get("quote_id") or v.get("channel_id")]
             if len(price_snaps) < 2:
@@ -861,6 +880,7 @@ with tab_sales:
                     else:
                         out = sig[["productId", "Produkt", "ref", "preis_vorher", "preis_nachher",
                                    "preis_pct", "vor_rate", "nach_rate", "qty_pct", "lost_units", "lost_net"]].copy()
+                        out["ref"] = out["ref"].map(lambda r: ref_label(r, cfg))
                         for c in ["preis_vorher", "preis_nachher", "vor_rate", "nach_rate", "lost_net"]:
                             out[c] = out[c].round(2)
                         out["preis_pct"] = out["preis_pct"].round(1)
@@ -893,3 +913,48 @@ with tab_sales:
                             "📥 Als Excel", data=buf.getvalue(),
                             file_name=f"abverkauf_preisverluste_{von}_{bis}.xlsx", key="ab_dl_b",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    # ── Einstellungen: Channel-Bezeichnungen + Source-Zuordnung ─────────────────
+    with sub_set:
+        st.markdown("##### Channel-Bezeichnungen")
+        st.caption("Sprechende Namen für die Channel-Preisreihen – werden überall verwendet "
+                   "(Momentaufnahme, Vergleich, Masterdatei-Analyse, Abverkauf).")
+        new_labels = {}
+        lcols = st.columns(len(CHANNEL_COLS))
+        for i, c in enumerate(CHANNEL_COLS):
+            new_labels[c] = lcols[i].text_input(
+                f"channelPrice{i + 1}",
+                value=cfg["channel_labels"].get(c, f"Channel {i + 1}"),
+                key=f"set_lbl_{c}",
+            )
+
+        st.markdown("##### Source-Zuordnung")
+        st.caption("Welche Preisreihe gilt je Marketing-Source? Nicht zugeordnete Sources nutzen den Quote-Preis.")
+        opt_refs = [REF_QUOTE] + CHANNEL_COLS
+
+        def _opt_label(r):
+            return QUOTE_LABEL if r == REF_QUOTE else (new_labels.get(r) or r)
+
+        sources = set(cfg["source_map"].keys())
+        if not ol.empty:
+            sources |= set(ol["source"].dropna().unique())
+        sources = sorted(s for s in sources if s)
+
+        new_map = {}
+        scols = st.columns(3)
+        for i, s in enumerate(sources):
+            cur = cfg["source_map"].get(s, REF_QUOTE)
+            idx = opt_refs.index(cur) if cur in opt_refs else 0
+            sel = scols[i % 3].selectbox(s, opt_refs, index=idx,
+                                         format_func=_opt_label, key=f"set_src_{s}")
+            if sel != REF_QUOTE:
+                new_map[s] = sel
+
+        if st.button("💾 Einstellungen speichern", type="primary", key="set_save"):
+            new_cfg = {"channel_labels": new_labels, "source_map": new_map}
+            folder_id = get_pricing_folder_id(drive)
+            upload_bytes_to_drive(drive, pl.config_to_bytes(new_cfg),
+                                  pl.CONFIG_FILE, folder_id, "application/json")
+            load_config.clear()
+            st.success("Einstellungen gespeichert.")
+            st.rerun()

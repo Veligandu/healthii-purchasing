@@ -7,6 +7,7 @@ Caching/UI — die Caching-Wrapper (st.cache_data) liegen in den jeweiligen Seit
 """
 
 import io
+import json
 import re
 from datetime import date, datetime
 
@@ -36,16 +37,20 @@ ORDERLINES_FILE = "orderlines.csv"
 ORDERLINES_COLS = ["productId", "productname", "type", "source", "date",
                    "quantity", "net", "ek", "margin"]
 
-# Marketing-Source → relevante Preisreihe (Rest → Quote)
-SOURCE_TO_CHANNEL = {
-    "googleph": "Channel 1",
-    "bing": "Channel 1",
-    "idealo": "Channel 2",
-    "medizinfuchs": "Channel 3",
+# Konfiguration (Channel-Bezeichnungen + Source-Zuordnung), persistent in Drive
+CONFIG_FILE = "pricing_config.json"
+REF_QUOTE = "quote"          # interner Schlüssel für die Quote-Preisreihe
+QUOTE_LABEL = "Quote"        # Anzeigename der Quote-Preisreihe
+
+# Interne Channel-Schlüssel = Snapshot-Spalten (channelPrice1..5); Labels sind nur Anzeige.
+DEFAULT_CHANNEL_LABELS = {c: f"Channel {i + 1}" for i, c in enumerate(CHANNEL_COLS)}
+# Default-Zuordnung Marketing-Source → Channel-Schlüssel (Rest → Quote)
+DEFAULT_SOURCE_MAP = {
+    "googleph": "channelPrice1",
+    "bing": "channelPrice1",
+    "idealo": "channelPrice2",
+    "medizinfuchs": "channelPrice3",
 }
-REF_QUOTE = "Quote"
-# nur diese Preisreihen kommen über Orderlines-Sources vor
-ORDER_REFS = ["Channel 1", "Channel 2", "Channel 3", REF_QUOTE]
 
 GERMAN_MONTHS = {
     "januar": 1, "februar": 2, "märz": 3, "maerz": 3, "april": 4, "mai": 5, "juni": 6,
@@ -261,9 +266,9 @@ def _parse_de_date(s):
         return None
 
 
-def ref_for_source(source: str) -> str:
-    """Marketing-Source → Preisreihe (Channel 1/2/3 oder Quote)."""
-    return SOURCE_TO_CHANNEL.get(str(source).strip().lower(), REF_QUOTE)
+def ref_for_source(source: str, source_map: dict) -> str:
+    """Marketing-Source → Preisreihen-Schlüssel (channelPriceN oder 'quote')."""
+    return source_map.get(str(source).strip().lower(), REF_QUOTE)
 
 
 def parse_orderlines_bytes(data: bytes) -> pd.DataFrame:
@@ -304,20 +309,69 @@ def merge_orderlines(existing: pd.DataFrame, neu: pd.DataFrame) -> pd.DataFrame:
 
 
 def price_table(snapshot_df: pd.DataFrame) -> pd.DataFrame:
-    """Snapshot (quote + channelPrice1..5) → Long-Tabelle [productId, ref, price]
-    für die in Orderlines vorkommenden Preisreihen (Quote, Channel 1–3)."""
+    """Snapshot (quote + channelPrice1..5) → Long-Tabelle [productId, ref, price].
+    ref ist der interne Schlüssel: 'quote' oder channelPriceN."""
     parts = []
     if "quote" in snapshot_df.columns:
         p = snapshot_df[["productId", "quote"]].rename(columns={"quote": "price"})
         p["ref"] = REF_QUOTE
         parts.append(p)
-    for lbl in ["Channel 1", "Channel 2", "Channel 3"]:
-        col = CHANNEL_COLS[CHANNEL_LABELS.index(lbl)]
+    for col in CHANNEL_COLS:
         if col in snapshot_df.columns:
             q = snapshot_df[["productId", col]].rename(columns={col: "price"})
-            q["ref"] = lbl
+            q["ref"] = col
             parts.append(q)
     if not parts:
         return pd.DataFrame(columns=["productId", "ref", "price"])
     out = pd.concat(parts, ignore_index=True)
     return out[out["price"].notna()][["productId", "ref", "price"]]
+
+
+# ─── Konfiguration (Channel-Labels + Source-Zuordnung) ───────────────────────────
+
+def default_config() -> dict:
+    return {
+        "channel_labels": dict(DEFAULT_CHANNEL_LABELS),
+        "source_map": dict(DEFAULT_SOURCE_MAP),
+    }
+
+
+def _merge_config(cfg: dict) -> dict:
+    """Füllt fehlende Schlüssel mit Defaults auf (robust gegen Teil-Configs)."""
+    base = default_config()
+    if not isinstance(cfg, dict):
+        return base
+    labels = base["channel_labels"]
+    labels.update({k: v for k, v in (cfg.get("channel_labels") or {}).items() if k in labels and v})
+    src = {str(k).strip().lower(): v for k, v in (cfg.get("source_map") or {}).items()}
+    return {"channel_labels": labels, "source_map": src or base["source_map"]}
+
+
+def load_config(drive) -> dict:
+    """Lädt die Pricing-Konfiguration aus Drive (oder Defaults)."""
+    folder_id = get_pricing_folder_id(drive)
+    q = f"name='{CONFIG_FILE}' and '{folder_id}' in parents and trashed=false"
+    files = drive.files().list(q=q, fields="files(id)", pageSize=1).execute(num_retries=3).get("files", [])
+    if not files:
+        return default_config()
+    try:
+        return _merge_config(json.loads(download_bytes(drive, files[0]["id"]).decode("utf-8")))
+    except Exception:
+        return default_config()
+
+
+def config_to_bytes(config: dict) -> bytes:
+    return json.dumps(config, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def channel_label_list(config: dict) -> list:
+    """Liste der Channel-Anzeigenamen, ausgerichtet an CHANNEL_COLS."""
+    labels = config.get("channel_labels", {})
+    return [labels.get(c, DEFAULT_CHANNEL_LABELS[c]) for c in CHANNEL_COLS]
+
+
+def ref_label(ref: str, config: dict) -> str:
+    """Interner ref-Schlüssel ('quote'/channelPriceN) → Anzeigename."""
+    if ref == REF_QUOTE:
+        return QUOTE_LABEL
+    return config.get("channel_labels", {}).get(ref, ref)
