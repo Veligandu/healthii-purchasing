@@ -308,6 +308,31 @@ def merge_orderlines(existing: pd.DataFrame, neu: pd.DataFrame) -> pd.DataFrame:
     return combined.drop_duplicates().reset_index(drop=True)
 
 
+def apply_orderlines(existing: pd.DataFrame, neu: pd.DataFrame, mode: str) -> pd.DataFrame:
+    """Fügt neue Orderlines hinzu.
+    mode='append': nur Tage übernehmen, die noch nicht vorhanden sind.
+    mode='replace': für Tage, die in `neu` vorkommen, alte Zeilen ersetzen."""
+    if existing is None or existing.empty:
+        return neu.drop_duplicates().reset_index(drop=True)
+    neu_dates = set(neu["date"].unique())
+    if mode == "replace":
+        keep = existing[~existing["date"].isin(neu_dates)]
+        combined = pd.concat([keep, neu], ignore_index=True)
+    else:  # append
+        existing_dates = set(existing["date"].unique())
+        add = neu[~neu["date"].isin(existing_dates)]
+        combined = pd.concat([existing, add], ignore_index=True)
+    return combined.drop_duplicates().reset_index(drop=True)
+
+
+def delete_orderlines_range(df: pd.DataFrame, von_iso: str, bis_iso: str) -> pd.DataFrame:
+    """Entfernt alle Orderlines mit Datum in [von_iso, bis_iso] (ISO-Strings)."""
+    if df is None or df.empty:
+        return df
+    mask = (df["date"] >= von_iso) & (df["date"] <= bis_iso)
+    return df[~mask].reset_index(drop=True)
+
+
 def price_table(snapshot_df: pd.DataFrame) -> pd.DataFrame:
     """Snapshot (quote + channelPrice1..5) → Long-Tabelle [productId, ref, price].
     ref ist der interne Schlüssel: 'quote' oder channelPriceN."""
