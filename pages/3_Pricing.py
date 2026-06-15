@@ -608,8 +608,9 @@ with tab_master:
 
             both = long[long["master"].notna() & long["snapshot"].notna()].copy()
             both["diff"] = both["master"] - both["snapshot"]
+            both["absdiff"] = both["diff"].abs()
             both["pct"] = both["diff"] / both["snapshot"] * 100
-            both["abweichend"] = both["diff"].abs() >= toleranz
+            both["abweichend"] = both["absdiff"] >= toleranz
 
             # KPIs gesamt
             k1, k2, k3, k4 = st.columns(4)
@@ -628,7 +629,7 @@ with tab_master:
                 "Übereinstimmend": g["abweichend"].apply(lambda s: int((~s).sum())),
                 "Abweichend": g["abweichend"].sum().astype(int),
                 "Ø Δ €": g["diff"].mean().round(3),
-                "Max |Δ| €": g["diff"].abs().max().round(2),
+                "Max |Δ| €": g["absdiff"].max().round(2),
             }).reindex(CHANNEL_LABELS).reset_index().rename(columns={"index": "Channel"})
             summary["Abweichend %"] = (summary["Abweichend"] / summary["Verglichen"] * 100).round(1)
             st.dataframe(
