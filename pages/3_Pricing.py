@@ -390,9 +390,10 @@ with tab_snap:
                 olw["ref"] = olw["source"].map(lambda s: ref_for_source(s, source_map))
                 olw["d"] = pd.to_datetime(olw["date"], errors="coerce")
                 olw = olw[olw["d"].notna()]
-                w_bis = olw["d"].max()
-                w_von = w_bis - pd.Timedelta(days=29)
-                olw = olw[olw["d"] >= w_von]
+                # 30 Tage vor dem Snapshot-Datum (sel), nicht vor heute
+                w_bis = pd.Timestamp(sel)
+                w_von = w_bis - pd.Timedelta(days=30)
+                olw = olw[(olw["d"] > w_von) & (olw["d"] <= w_bis)]
                 rev = olw.groupby(["productId", "ref"])["net"].sum().reset_index()
 
                 w_rows = []
@@ -425,8 +426,8 @@ with tab_snap:
                     },
                 )
                 st.caption(
-                    f"Gewichtung mit Netto-Umsatz je Channel aus Orderlines "
-                    f"({w_von:%d.%m.%Y} – {w_bis:%d.%m.%Y}). "
+                    f"Gewichtung mit Netto-Umsatz je Channel aus Orderlines der 30 Tage vor dem Snapshot "
+                    f"({(w_von + pd.Timedelta(days=1)):%d.%m.%Y} – {w_bis:%d.%m.%Y}). "
                     "Je Channel zählen nur PZNs mit Channel- und Quote-Preis sowie Umsatz auf diesem Channel."
                 )
 
