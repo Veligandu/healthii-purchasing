@@ -31,6 +31,29 @@ MASTER_NUM_COLS = ["price", "uvp", "aep"] + MASTER_CHANNEL_COLS
 PRICE_EDGES = [0, 10, 25, 50, 100, float("inf")]
 PRICE_LABELS = ["0–10 €", "10–25 €", "25–50 €", "50–100 €", "100+ €"]
 
+# Orderlines (Abverkauf)
+ORDERLINES_FILE = "orderlines.csv"
+ORDERLINES_COLS = ["productId", "productname", "type", "source", "date",
+                   "quantity", "net", "ek", "margin"]
+
+# Marketing-Source → relevante Preisreihe (Rest → Quote)
+SOURCE_TO_CHANNEL = {
+    "googleph": "Channel 1",
+    "bing": "Channel 1",
+    "idealo": "Channel 2",
+    "medizinfuchs": "Channel 3",
+}
+REF_QUOTE = "Quote"
+# nur diese Preisreihen kommen über Orderlines-Sources vor
+ORDER_REFS = ["Channel 1", "Channel 2", "Channel 3", REF_QUOTE]
+
+GERMAN_MONTHS = {
+    "januar": 1, "februar": 2, "märz": 3, "maerz": 3, "april": 4, "mai": 5, "juni": 6,
+    "juli": 7, "august": 8, "september": 9, "oktober": 10, "november": 11, "dezember": 12,
+    "jan": 1, "feb": 2, "mrz": 3, "apr": 4, "jun": 6, "jul": 7, "aug": 8,
+    "sep": 9, "sept": 9, "okt": 10, "nov": 11, "dez": 12,
+}
+
 
 # ─── Hilfsfunktionen ────────────────────────────────────────────────────────────
 
@@ -208,3 +231,93 @@ def load_master(drive, iso_datum: str) -> pd.DataFrame:
     if not entry or not entry["master_id"]:
         return pd.DataFrame()
     return read_master_csv(download_bytes(drive, entry["master_id"]))
+
+
+# ─── Orderlines (Abverkauf) ──────────────────────────────────────────────────────
+
+def _de_num(series: pd.Series) -> pd.Series:
+    """Deutsche Zahlen ('1.234,56') → float."""
+    return pd.to_numeric(
+        series.astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False),
+        errors="coerce",
+    )
+
+
+def _parse_de_date(s):
+    """Deutsches Datum 'DD Monat, YYYY' → ISO-String 'YYYY-MM-DD' (oder None)."""
+    if not isinstance(s, str):
+        return None
+    parts = s.replace(",", " ").split()
+    if len(parts) < 3:
+        return None
+    try:
+        tag = int(parts[0])
+        mon = GERMAN_MONTHS.get(parts[1].strip().lower())
+        jahr = int(parts[2])
+        if mon is None:
+            return None
+        return date(jahr, mon, tag).isoformat()
+    except (ValueError, KeyError):
+        return None
+
+
+def ref_for_source(source: str) -> str:
+    """Marketing-Source → Preisreihe (Channel 1/2/3 oder Quote)."""
+    return SOURCE_TO_CHANNEL.get(str(source).strip().lower(), REF_QUOTE)
+
+
+def parse_orderlines_bytes(data: bytes) -> pd.DataFrame:
+    """Roher Orderlines-Export → normalisierte Tabelle (Spalten = ORDERLINES_COLS)."""
+    df = pd.read_csv(io.BytesIO(data), dtype=str)
+    df.columns = df.columns.str.strip()
+    src_col = next((c for c in df.columns if "source" in c.lower()), None)
+    out = pd.DataFrame()
+    out["productId"] = df["Pzn"].astype(str).str.strip()
+    out["productname"] = df.get("Productname")
+    out["type"] = df.get("Type")
+    out["source"] = (df[src_col].astype(str).str.strip().str.lower()
+                     if src_col else "unbekannt")
+    out["date"] = df["CreatedAt: Tag"].map(_parse_de_date)
+    out["quantity"] = pd.to_numeric(df.get("Quantity"), errors="coerce")
+    out["net"] = _de_num(df["TotalNet"]) if "TotalNet" in df.columns else pd.NA
+    out["ek"] = _de_num(df["Unit Ek Net"]) if "Unit Ek Net" in df.columns else pd.NA
+    out["margin"] = _de_num(df["Relative Margin (€)"]) if "Relative Margin (€)" in df.columns else pd.NA
+    out = out[out["productId"].notna() & out["date"].notna() & out["quantity"].notna()]
+    return out[ORDERLINES_COLS].reset_index(drop=True)
+
+
+def load_orderlines(drive) -> pd.DataFrame:
+    """Lädt die in Drive akkumulierten Orderlines (normalisiert)."""
+    folder_id = get_pricing_folder_id(drive)
+    q = f"name='{ORDERLINES_FILE}' and '{folder_id}' in parents and trashed=false"
+    files = drive.files().list(q=q, fields="files(id)", pageSize=1).execute(num_retries=3).get("files", [])
+    if not files:
+        return pd.DataFrame(columns=ORDERLINES_COLS)
+    df = pd.read_csv(io.BytesIO(download_bytes(drive, files[0]["id"])), dtype={"productId": str})
+    return df
+
+
+def merge_orderlines(existing: pd.DataFrame, neu: pd.DataFrame) -> pd.DataFrame:
+    """Akkumuliert neue Orderlines zu bestehenden, Dedup über alle Spalten."""
+    combined = pd.concat([existing, neu], ignore_index=True)
+    return combined.drop_duplicates().reset_index(drop=True)
+
+
+def price_table(snapshot_df: pd.DataFrame) -> pd.DataFrame:
+    """Snapshot (quote + channelPrice1..5) → Long-Tabelle [productId, ref, price]
+    für die in Orderlines vorkommenden Preisreihen (Quote, Channel 1–3)."""
+    parts = []
+    if "quote" in snapshot_df.columns:
+        p = snapshot_df[["productId", "quote"]].rename(columns={"quote": "price"})
+        p["ref"] = REF_QUOTE
+        parts.append(p)
+    for lbl in ["Channel 1", "Channel 2", "Channel 3"]:
+        col = CHANNEL_COLS[CHANNEL_LABELS.index(lbl)]
+        if col in snapshot_df.columns:
+            q = snapshot_df[["productId", col]].rename(columns={col: "price"})
+            q["ref"] = lbl
+            parts.append(q)
+    if not parts:
+        return pd.DataFrame(columns=["productId", "ref", "price"])
+    out = pd.concat(parts, ignore_index=True)
+    return out[out["price"].notna()][["productId", "ref", "price"]]
