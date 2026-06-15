@@ -631,44 +631,44 @@ with tab_cmp:
 
                 st.divider()
 
-                # ── Stärkste Bewegungen ──
-                st.markdown("##### Stärkste Veränderungen")
-                anzahl = st.slider("Anzahl je Richtung", 5, 50, 15, step=5, key="cmp_top")
+                # ── Bedeutendste Veränderungen (umsatzgewichtet) ──
+                st.markdown("##### Bedeutendste Veränderungen")
+                st.caption("Sortiert nach Bedeutung = |Preisänderung| × Umsatz der letzten 30 Tage "
+                           f"({metrik}, vor dem neueren Datum). Nur PZNs mit Umsatz in diesem Fenster.")
+                anzahl = st.slider("Anzahl", 5, 100, 20, step=5, key="cmp_top")
 
-                def movers_table(sub):
-                    out = sub[["productId", "preis_a", "preis_b", "abs", "pct", "Cluster"]].copy()
-                    out["pct"] = (out["pct"] * 100).round(1)
-                    out["abs"] = out["abs"].round(2)
-                    out["preis_a"] = out["preis_a"].round(2)
-                    out["preis_b"] = out["preis_b"].round(2)
-                    return out.rename(columns={
-                        "productId": "PZN", "preis_a": "Vorher", "preis_b": "Nachher",
-                        "abs": "Δ €", "pct": "Δ %",
-                    })
+                namen_cmp = (ol_all.groupby("productId")["productname"].first()
+                             if not ol_all.empty else pd.Series(dtype=str))
+                bed = beide[beide["_rev"] > 0].copy()
+                bed["Name"] = bed["productId"].map(namen_cmp)
+                bed["impact"] = bed["pct"].abs() * bed["_rev"]
+                bed = bed.sort_values("impact", ascending=False)
 
-                colcfg = {
-                    "Vorher": st.column_config.NumberColumn(format="%.2f €"),
-                    "Nachher": st.column_config.NumberColumn(format="%.2f €"),
-                    "Δ €": st.column_config.NumberColumn(format="%.2f €"),
-                    "Δ %": st.column_config.NumberColumn(format="%.1f %%"),
-                }
-                cu, cd = st.columns(2)
-                with cu:
-                    st.markdown("**📈 Stärkste Steigerungen**")
-                    st.dataframe(movers_table(beide.nlargest(anzahl, "pct")),
-                                 use_container_width=True, hide_index=True, column_config=colcfg)
-                with cd:
-                    st.markdown("**📉 Stärkste Senkungen**")
-                    st.dataframe(movers_table(beide.nsmallest(anzahl, "pct")),
-                                 use_container_width=True, hide_index=True, column_config=colcfg)
+                def bed_table(sub):
+                    o = sub[["productId", "Name", "pct", "_rev"]].copy()
+                    o["pct"] = (o["pct"] * 100).round(1)
+                    o["_rev"] = o["_rev"].round(2)
+                    return o.rename(columns={"productId": "PZN", "pct": "% Preisänderung",
+                                             "_rev": "Umsatz 30 Tage €"})
+
+                if bed.empty:
+                    st.info("Keine Umsatzdaten im 30-Tage-Fenster für diese Preisart – "
+                            "umsatzgewichtete Bewertung nicht möglich.")
+                else:
+                    st.dataframe(
+                        bed_table(bed.head(anzahl)), use_container_width=True, hide_index=True,
+                        column_config={
+                            "% Preisänderung": st.column_config.NumberColumn(format="%.1f %%"),
+                            "Umsatz 30 Tage €": st.column_config.NumberColumn(format="%.2f €"),
+                        },
+                    )
 
                 # ── Export ──
                 st.divider()
                 buf = io.BytesIO()
                 with pd.ExcelWriter(buf, engine="openpyxl") as w:
                     cl.to_excel(w, index=False, sheet_name="Cluster")
-                    movers_table(beide.sort_values("pct", ascending=False)).to_excel(
-                        w, index=False, sheet_name="Alle Änderungen")
+                    bed_table(bed).to_excel(w, index=False, sheet_name="Bedeutendste Änderungen")
                 st.download_button(
                     "📥 Vergleich als Excel",
                     data=buf.getvalue(),
