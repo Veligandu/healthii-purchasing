@@ -339,19 +339,22 @@ with tab_snap:
         keys = list(snaps.keys())
         sel = st.selectbox("Zeitpunkt", keys, index=len(keys) - 1,
                            format_func=fmt_date, key="snap_sel")
-        df = load_snapshot(drive, sel).copy()
-        df = df[df["quote"].notna()]  # Cluster basiert auf Quote-Preis
+        full = load_snapshot(drive, sel)
+        df = full[full["quote"].notna()].copy()  # Cluster/Vergleiche basieren auf Quote-Preis
 
         if df.empty:
             st.warning("Für diesen Zeitpunkt sind keine Quote-Preise hinterlegt.")
         else:
             df["Cluster"] = assign_price_cluster(df["quote"])
 
-            # KPIs: Produktzahl Quote + Anzahl je Channel-Preis
+            # KPIs: Produktzahl Quote + Anzahl je Channel-Preis (+ davon mit Quote)
             cols = st.columns(1 + len(CHANNEL_COLS))
-            cols[0].metric("Produkte (Quote)", f"{len(df):,}".replace(",", "."))
+            cols[0].metric("Produkte (Quote)", f"{int(full['quote'].notna().sum()):,}".replace(",", "."))
             for i, (c, lbl) in enumerate(zip(CHANNEL_COLS, CH_LABELS), start=1):
-                cols[i].metric(lbl, f"{int(df[c].notna().sum()):,}".replace(",", "."))
+                tot = int(full[c].notna().sum())
+                mit_quote = int((full[c].notna() & full["quote"].notna()).sum())
+                cols[i].metric(lbl, f"{tot:,}".replace(",", "."))
+                cols[i].caption(f"davon mit Quote: {mit_quote:,}".replace(",", "."))
 
             st.divider()
 
