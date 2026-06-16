@@ -6,10 +6,12 @@ Preisvergleich / EK-Preispflege.
 import base64
 import calendar
 import io
+import math
 import os
 import re
 from datetime import date, datetime
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -716,9 +718,31 @@ with tab_cmp:
                         w = pd.Series(1.0, index=mat.index)
                     avg = mat.mul(w, axis=0).sum() / w.sum()          # (gew.) Ø-Preis je Zeitpunkt
                     index_ser = (avg / avg.iloc[0])
-                    chart_df = pd.DataFrame({"Index": index_ser.values},
-                                            index=pd.to_datetime(index_ser.index))
-                    st.line_chart(chart_df, color="#0D9488")
+
+                    # Y-Achse um 1,0 zentriert, „nett" gerundet auf die Schwankung
+                    dev = max(abs(index_ser.max() - 1), abs(index_ser.min() - 1), 0.01)
+
+                    def _nice_ceil(x):
+                        base = 10 ** math.floor(math.log10(x))
+                        for mlt in (1, 2, 2.5, 5, 10):
+                            if x <= mlt * base:
+                                return mlt * base
+                        return 10 * base
+
+                    nd = _nice_ceil(dev * 1.1)
+                    domain = [round(1 - nd, 4), round(1 + nd, 4)]
+                    chart_df = pd.DataFrame({"Datum": pd.to_datetime(index_ser.index),
+                                             "Index": index_ser.values})
+                    line = alt.Chart(chart_df).mark_line(point=True, color="#0D9488").encode(
+                        x=alt.X("Datum:T", title=None),
+                        y=alt.Y("Index:Q", scale=alt.Scale(domain=domain, nice=False, zero=False),
+                                title="Index (Start = 1,00)"),
+                        tooltip=[alt.Tooltip("Datum:T", title="Datum"),
+                                 alt.Tooltip("Index:Q", format=".3f", title="Index")],
+                    )
+                    rule = alt.Chart(pd.DataFrame({"y": [1.0]})).mark_rule(
+                        color="#9CA3AF", strokeDash=[4, 4]).encode(y="y:Q")
+                    st.altair_chart(line + rule, use_container_width=True)
                     st.caption(
                         f"Indexierter {metrik}-Preis (Start {fmt_date(von)} = 1,00), "
                         f"{'umsatzgewichtet' if gewichtet else 'ungewichtet'}, gemeinsamer Warenkorb "
