@@ -564,8 +564,21 @@ with tab_cmp:
         if von == bis:
             st.warning("Bitte zwei unterschiedliche Zeitpunkte wählen.")
         else:
-            da = load_snapshot(drive, von)[["productId", col]].rename(columns={col: "preis_a"})
-            db = load_snapshot(drive, bis)[["productId", col]].rename(columns={col: "preis_b"})
+            # Hat ein Datum keine Channel-Datei (nur Quote), werden dessen Quote-Preise
+            # als Channel-Preise verwendet.
+            def _preis_series(date_iso, zielname):
+                snap = load_snapshot(drive, date_iso)
+                fallback = col != "quote" and not snaps[date_iso].get("channel_id")
+                quelle = "quote" if fallback else col
+                s = snap[["productId", quelle]].rename(columns={quelle: zielname})
+                return s, fallback
+
+            da, fb_von = _preis_series(von, "preis_a")
+            db, fb_bis = _preis_series(bis, "preis_b")
+            if fb_von or fb_bis:
+                hinweis = [fmt_date(d) for d, fb in [(von, fb_von), (bis, fb_bis)] if fb]
+                st.info(f"Nur Quote-Preise vorhanden für {', '.join(hinweis)} – "
+                        f"dort werden die Quote-Preise als „{metrik}“ verwendet.")
             m = da.merge(db, on="productId", how="outer")
 
             beide = m[(m["preis_a"].notna()) & (m["preis_b"].notna())].copy()
