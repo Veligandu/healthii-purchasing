@@ -693,6 +693,38 @@ with tab_cmp:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
 
+                # ── Indexierter Preisverlauf über alle Zeitpunkte im Zeitraum ──
+                st.divider()
+                st.markdown("##### Indexierter Preisverlauf")
+                range_dates = [d for d in keys
+                               if von <= d <= bis and (snaps[d].get("quote_id") or snaps[d].get("channel_id"))]
+                serien = {}
+                for d in range_dates:
+                    snap_d = load_snapshot(drive, d)
+                    q = "quote" if (col != "quote" and not snaps[d].get("channel_id")) else col
+                    if q not in snap_d.columns:
+                        continue
+                    s = snap_d[["productId", q]].rename(columns={q: d}).dropna(subset=[d])
+                    serien[d] = s.set_index("productId")[d]
+                mat = pd.DataFrame(serien).dropna()  # gemeinsamer Warenkorb (an allen Zeitpunkten vorhanden)
+                if mat.shape[1] < 2 or mat.empty:
+                    st.info("Nicht genügend gemeinsame Preispunkte im Zeitraum für einen Indexverlauf.")
+                else:
+                    w = rev.reindex(mat.index).fillna(0.0)
+                    gewichtet = w.sum() > 0
+                    if not gewichtet:
+                        w = pd.Series(1.0, index=mat.index)
+                    avg = mat.mul(w, axis=0).sum() / w.sum()          # (gew.) Ø-Preis je Zeitpunkt
+                    index_ser = (avg / avg.iloc[0])
+                    chart_df = pd.DataFrame({"Index": index_ser.values},
+                                            index=pd.to_datetime(index_ser.index))
+                    st.line_chart(chart_df, color="#0D9488")
+                    st.caption(
+                        f"Indexierter {metrik}-Preis (Start {fmt_date(von)} = 1,00), "
+                        f"{'umsatzgewichtet' if gewichtet else 'ungewichtet'}, gemeinsamer Warenkorb "
+                        f"von {len(mat):,} PZN über {mat.shape[1]} Zeitpunkte.".replace(',', '.')
+                    )
+
 # ════════════════════════════════════════════════════════════════════════════════
 # TAB 3 – Masterdatei-Analyse (Abgleich Master-Channelpreise vs. Channel-Snapshot)
 # ════════════════════════════════════════════════════════════════════════════════
