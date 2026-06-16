@@ -314,8 +314,8 @@ with st.sidebar:
         } for k, v in _snaps.items()]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-tab_snap, tab_cmp, tab_master, tab_sales = st.tabs(
-    ["📊 Momentaufnahme", "🔀 Vergleich", "🗂️ Masterdatei-Analyse", "🛒 Abverkauf"]
+tab_snap, tab_cmp, tab_master, tab_sales, tab_produkt = st.tabs(
+    ["📊 Momentaufnahme", "🔀 Vergleich", "🗂️ Masterdatei-Analyse", "🛒 Abverkauf", "🔍 Produktansicht"]
 )
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -1237,3 +1237,73 @@ with tab_sales:
             load_config.clear()
             st.success("Einstellungen gespeichert.")
             st.rerun()
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# TAB 5 – Produktansicht (eine PZN: aktuelle Preise + Preisverlauf je Channel)
+# ════════════════════════════════════════════════════════════════════════════════
+with tab_produkt:
+    snaps = list_snapshots(drive)
+    if not snaps:
+        st.info("Noch keine Daten vorhanden. Bitte links in der Seitenleiste Preise hochladen.")
+    else:
+        pzn_raw = st.text_input("PZN", key="pv_pzn", placeholder="z. B. 03441621")
+        pzn = pzn_raw.strip()
+        if pzn.isdigit():
+            pzn = pzn.zfill(8)
+
+        if not pzn:
+            st.caption("PZN eingeben, um aktuelle Preise und den Preisverlauf anzuzeigen.")
+        else:
+            rows = []
+            for d in snaps.keys():  # aufsteigend sortiert
+                snap = load_snapshot(drive, d)
+                r = snap[snap["productId"] == pzn]
+                if r.empty:
+                    continue
+                r = r.iloc[0]
+                if "quote" in snap.columns and pd.notna(r.get("quote")):
+                    rows.append({"Datum": d, "Reihe": QUOTE_LABEL, "Preis": float(r["quote"])})
+                for c, lbl in zip(CHANNEL_COLS, CH_LABELS):
+                    v = r.get(c)
+                    if pd.notna(v):
+                        rows.append({"Datum": d, "Reihe": lbl, "Preis": float(v)})
+            hist = pd.DataFrame(rows)
+
+            if hist.empty:
+                st.warning(f"Keine Preisdaten für PZN {pzn} gefunden.")
+            else:
+                # Produktname aus Orderlines (falls vorhanden)
+                ol_p = load_orderlines(drive)
+                name = None
+                if not ol_p.empty:
+                    nm = ol_p[ol_p["productId"] == pzn]["productname"]
+                    if not nm.empty:
+                        name = nm.iloc[0]
+                st.markdown(f"#### PZN {pzn}" + (f" — {name}" if name else ""))
+
+                reihen_order = [QUOTE_LABEL] + CH_LABELS
+
+                # Aktuelle Preise = jüngstes Datum mit Daten für diese PZN
+                letztes = hist["Datum"].max()
+                akt = hist[hist["Datum"] == letztes]
+                vorhanden = [r for r in reihen_order if r in set(akt["Reihe"])]
+                akt_idx = akt.set_index("Reihe")
+                st.markdown(f"##### Aktuelle Preise ({fmt_date(letztes)})")
+                pcols = st.columns(len(vorhanden))
+                for i, reihe in enumerate(vorhanden):
+                    pcols[i].metric(reihe, f"{akt_idx.loc[reihe, 'Preis']:.2f} €")
+
+                # Preisverlauf-Diagramm – alle Reihen in unterschiedlichen Farben
+                st.markdown("##### Preisverlauf")
+                hist_chart = hist.copy()
+                hist_chart["Datum"] = pd.to_datetime(hist_chart["Datum"])
+                line = alt.Chart(hist_chart).mark_line(point=True).encode(
+                    x=alt.X("Datum:T", title=None),
+                    y=alt.Y("Preis:Q", title="Preis (€)", scale=alt.Scale(zero=False)),
+                    color=alt.Color("Reihe:N", title="Preisreihe", sort=reihen_order),
+                    tooltip=[alt.Tooltip("Datum:T", title="Datum"),
+                             alt.Tooltip("Reihe:N", title="Reihe"),
+                             alt.Tooltip("Preis:Q", format=".2f", title="Preis (€)")],
+                )
+                st.altair_chart(line, use_container_width=True)
