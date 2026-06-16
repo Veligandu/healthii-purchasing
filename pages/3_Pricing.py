@@ -593,19 +593,6 @@ with tab_cmp:
                 beide["Cluster"] = assign_price_cluster(beide["preis_a"])
                 beide["Veränderung"] = beide["pct"].apply(change_cluster)
 
-                # KPIs
-                k1, k2, k3, k4 = st.columns(4)
-                k1.metric("Vergleichbar", f"{len(beide):,}".replace(",", "."))
-                k2.metric("Ø Änderung", f"{beide['pct'].mean() * 100:+.1f} %")
-                k3.metric("Neu", f"{len(neu):,}".replace(",", "."))
-                k4.metric("Entfernt", f"{len(entfernt):,}".replace(",", "."))
-
-                st.caption(f"Vergleich {metrik}: {fmt_date(von)} → {fmt_date(bis)}")
-                st.divider()
-
-                # ── Veränderung je Preis-Cluster (inkl. umsatzgewichtet) ──
-                st.markdown("##### Veränderung je Preis-Cluster")
-
                 # Umsatz je PZN für die gewählte Preisreihe (ref=col), 30 Tage vor dem neueren Datum
                 ol_all = load_orderlines(drive)
                 w_bis = pd.Timestamp(bis)
@@ -619,6 +606,23 @@ with tab_cmp:
                     rev = olw.groupby("productId")["net"].sum()
                 beide["_rev"] = beide["productId"].map(rev).fillna(0.0)
                 beide["_pw"] = beide["pct"] * beide["_rev"]
+                rev_sum = beide["_rev"].sum()
+                w_change = (beide["_pw"].sum() / rev_sum * 100) if rev_sum > 0 else None
+
+                # KPIs
+                k1, k2, k3, k4, k5 = st.columns(5)
+                k1.metric("Vergleichbar", f"{len(beide):,}".replace(",", "."))
+                k2.metric("Ø Änderung", f"{beide['pct'].mean() * 100:+.1f} %")
+                k3.metric("Ø Änderung (umsatzgew.)",
+                          f"{w_change:+.1f} %" if w_change is not None else "—")
+                k4.metric("Neu", f"{len(neu):,}".replace(",", "."))
+                k5.metric("Entfernt", f"{len(entfernt):,}".replace(",", "."))
+
+                st.caption(f"Vergleich {metrik}: {fmt_date(von)} → {fmt_date(bis)}")
+                st.divider()
+
+                # ── Veränderung je Preis-Cluster (inkl. umsatzgewichtet) ──
+                st.markdown("##### Veränderung je Preis-Cluster")
 
                 g = beide.groupby("Cluster", observed=False)
                 rsum = g["_rev"].sum()
