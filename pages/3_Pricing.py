@@ -558,25 +558,73 @@ with tab_cmp:
         with c2:
             bis = st.selectbox("Bis", keys, index=len(keys) - 1, format_func=fmt_date, key="cmp_bis")
         with c3:
-            metrik = st.selectbox("Preisart", ["Quote"] + CH_LABELS, key="cmp_metrik")
+            metrik = st.selectbox("Preisart", ["Quote"] + CH_LABELS + ["Alle"], key="cmp_metrik")
 
         col_map = {"Quote": "quote", **{lbl: c for lbl, c in zip(CH_LABELS, CHANNEL_COLS)}}
-        col = col_map[metrik]
+
+        # Hat ein Datum keine Channel-Datei (nur Quote), werden dessen Quote-Preise
+        # als Channel-Preise verwendet.
+        def _preis_series(date_iso, zielname, col_):
+            snap = load_snapshot(drive, date_iso)
+            fallback = col_ != "quote" and not snaps[date_iso].get("channel_id")
+            quelle = "quote" if fallback else col_
+            return snap[["productId", quelle]].rename(columns={quelle: zielname}), fallback
 
         if von == bis:
             st.warning("Bitte zwei unterschiedliche Zeitpunkte wählen.")
-        else:
-            # Hat ein Datum keine Channel-Datei (nur Quote), werden dessen Quote-Preise
-            # als Channel-Preise verwendet.
-            def _preis_series(date_iso, zielname):
-                snap = load_snapshot(drive, date_iso)
-                fallback = col != "quote" and not snaps[date_iso].get("channel_id")
-                quelle = "quote" if fallback else col
-                s = snap[["productId", quelle]].rename(columns={quelle: zielname})
-                return s, fallback
+        elif metrik == "Alle":
+            st.caption(f"Alle Preisarten: {fmt_date(von)} → {fmt_date(bis)}")
+            ol_all = load_orderlines(drive)
+            w_bis = pd.Timestamp(bis)
+            w_von = w_bis - pd.Timedelta(days=30)
+            rev_by_ref = {}
+            if not ol_all.empty:
+                olw = ol_all.copy()
+                olw["ref"] = olw["source"].map(lambda s: ref_for_source(s, source_map))
+                olw["d"] = pd.to_datetime(olw["date"], errors="coerce")
+                olw = olw[(olw["d"] > w_von) & (olw["d"] <= w_bis)]
+                for ref_key, grp in olw.groupby("ref"):
+                    rev_by_ref[ref_key] = grp.groupby("productId")["net"].sum()
 
-            da, fb_von = _preis_series(von, "preis_a")
-            db, fb_bis = _preis_series(bis, "preis_b")
+            def _wavg(sub):
+                rs = sub["_rev"].sum()
+                return round((sub["pct"] * sub["_rev"]).sum() / rs, 1) if rs > 0 else None
+
+            rows = []
+            for col_, lbl in [("quote", QUOTE_LABEL)] + list(zip(CHANNEL_COLS, CH_LABELS)):
+                da, _fa = _preis_series(von, "preis_a", col_)
+                db, _fb = _preis_series(bis, "preis_b", col_)
+                mm = da.merge(db, on="productId", how="inner")
+                mm = mm[(mm["preis_a"].notna()) & (mm["preis_b"].notna()) & (mm["preis_a"] > 0)].copy()
+                if mm.empty:
+                    continue
+                mm["pct"] = (mm["preis_b"] - mm["preis_a"]) / mm["preis_a"] * 100
+                mm["_rev"] = mm["productId"].map(rev_by_ref.get(col_, pd.Series(dtype=float))).fillna(0.0)
+                rows.append({
+                    "Preisart": lbl,
+                    "Änderung Gesamt %": round(mm["pct"].mean(), 1),
+                    "Umsatzgew. Gesamt %": _wavg(mm),
+                    "Umsatzgew. 0–25 € %": _wavg(mm[mm["preis_a"] < 25]),
+                    "Umsatzgew. >25 € %": _wavg(mm[mm["preis_a"] >= 25]),
+                })
+            if not rows:
+                st.warning("Keine vergleichbaren Daten für diesen Zeitraum.")
+            else:
+                pct_cols = ["Änderung Gesamt %", "Umsatzgew. Gesamt %",
+                            "Umsatzgew. 0–25 € %", "Umsatzgew. >25 € %"]
+                st.dataframe(
+                    pd.DataFrame(rows), use_container_width=True, hide_index=True,
+                    column_config={c: st.column_config.NumberColumn(format="%.1f %%") for c in pct_cols},
+                )
+                st.caption(
+                    "Umsatzgewichtung: Netto-Umsatz je Preisart der 30 Tage vor dem neueren Datum. "
+                    "Cluster nach Preis am Startdatum (0–25 € bzw. >25 €). "
+                    "Nur PZNs mit Preis in beiden Zeitpunkten."
+                )
+        else:
+            col = col_map[metrik]
+            da, fb_von = _preis_series(von, "preis_a", col)
+            db, fb_bis = _preis_series(bis, "preis_b", col)
             if fb_von or fb_bis:
                 hinweis = [fmt_date(d) for d, fb in [(von, fb_von), (bis, fb_bis)] if fb]
                 st.info(f"Nur Quote-Preise vorhanden für {', '.join(hinweis)} – "
