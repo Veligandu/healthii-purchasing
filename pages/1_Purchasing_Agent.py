@@ -1060,16 +1060,18 @@ with tab1:
             key="editor_tab1",
         )
 
-        # Bestellwert live neu berechnen
-        edited["Bestellwert"] = edited["Bestellmenge"] * edited["Rechnungs Netto Ek Ve1"]
+        # Bestellwert live neu berechnen (EK kann bei Neuanlagen leer sein → numerisch erzwingen)
+        _ek_edit = pd.to_numeric(edited["Rechnungs Netto Ek Ve1"], errors="coerce")
+        edited["Bestellwert"] = edited["Bestellmenge"] * _ek_edit
 
         # Geänderte Mengen sofort übernehmen, damit der Bestellwert direkt aktualisiert angezeigt wird
         _df_session = st.session_state.df_bestellen_edit.copy().reset_index(drop=True)
         _menge_neu = pd.to_numeric(edited["Bestellmenge"], errors="coerce").fillna(0).values
         _menge_alt = pd.to_numeric(_df_session["Bestellmenge"], errors="coerce").fillna(0).values
         if len(_menge_neu) == len(_menge_alt) and (_menge_neu != _menge_alt).any():
+            _ek_session = pd.to_numeric(_df_session["Rechnungs Netto Ek Ve1"], errors="coerce")
             _df_session["Bestellmenge"] = _menge_neu
-            _df_session["Bestellwert"]  = (_menge_neu * _df_session["Rechnungs Netto Ek Ve1"]).round(2)
+            _df_session["Bestellwert"]  = (_menge_neu * _ek_session).round(2)
             st.session_state.df_bestellen_edit = _df_session
             st.session_state["excel_out"] = None
             st.rerun()
