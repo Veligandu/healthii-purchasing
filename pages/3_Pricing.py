@@ -1044,6 +1044,31 @@ with tab_sales:
                 st.caption("Produkte im gewählten Zeitraum nach Netto-Stückpreis klassifiziert; "
                            "je Produktvorkommen der CM2 des gesamten Warenkorbs.")
 
+            # ── Ø CM2 pro Order je Tag ──
+            if "order_id" in ol_range.columns and ol_range["order_id"].notna().any():
+                st.markdown("##### Ø CM2 pro Order je Tag")
+                olc3 = ol_range[ol_range["order_id"].notna()].copy()
+                cm2_o = pl.basket_cm2(olc3)
+                per_order = olc3.groupby("order_id").agg(d=("d", "max"), net=("net", "sum"))
+                per_order["cm2"] = cm2_o
+                per_order["tag"] = per_order["d"].dt.normalize()
+                tag = per_order.groupby("tag").agg(
+                    Umsatz=("net", "sum"), Orders=("net", "size"), CM2=("cm2", "mean")
+                ).reset_index().sort_values("tag")
+                tag["Datum"] = tag["tag"].dt.strftime("%d.%m.%Y")
+                tag["Umsatz"] = tag["Umsatz"].round(2)
+                tag["CM2"] = tag["CM2"].round(2)
+                st.dataframe(
+                    tag[["Datum", "Umsatz", "Orders", "CM2"]].rename(
+                        columns={"Orders": "Anzahl Orders", "CM2": "Ø CM2 / Order €"}),
+                    use_container_width=True, hide_index=True,
+                    column_config={
+                        "Umsatz": st.column_config.NumberColumn(format="%.2f €"),
+                        "Anzahl Orders": st.column_config.NumberColumn(format="%d"),
+                        "Ø CM2 / Order €": st.column_config.NumberColumn(format="%.2f €"),
+                    },
+                )
+
         # ── B) Preisänderungs-Wirkung ──────────────────────────────────────────
     with sub_b:
         if ol.empty:
