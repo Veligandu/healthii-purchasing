@@ -34,7 +34,7 @@ PRICE_LABELS = ["0–10 €", "10–25 €", "25–50 €", "50–100 €", "100
 
 # Orderlines (Abverkauf)
 ORDERLINES_FILE = "orderlines.csv"
-ORDERLINES_COLS = ["productId", "productname", "type", "source", "date",
+ORDERLINES_COLS = ["productId", "productname", "type", "source", "order_id", "date",
                    "quantity", "net", "ek", "margin"]
 
 # Konfiguration (Channel-Bezeichnungen + Source-Zuordnung), persistent in Drive
@@ -276,12 +276,14 @@ def parse_orderlines_bytes(data: bytes) -> pd.DataFrame:
     df = pd.read_csv(io.BytesIO(data), dtype=str)
     df.columns = df.columns.str.strip()
     src_col = next((c for c in df.columns if "source" in c.lower()), None)
+    oid_col = next((c for c in df.columns if c.strip().lower() == "ordernumber"), None)
     out = pd.DataFrame()
     out["productId"] = df["Pzn"].astype(str).str.strip()
     out["productname"] = df.get("Productname")
     out["type"] = df.get("Type")
     out["source"] = (df[src_col].astype(str).str.strip().str.lower()
                      if src_col else "unbekannt")
+    out["order_id"] = df[oid_col].astype(str).str.strip() if oid_col else pd.NA
     out["date"] = df["CreatedAt: Tag"].map(_parse_de_date)
     out["quantity"] = pd.to_numeric(df.get("Quantity"), errors="coerce")
     out["net"] = _de_num(df["TotalNet"]) if "TotalNet" in df.columns else pd.NA
@@ -298,7 +300,10 @@ def load_orderlines(drive) -> pd.DataFrame:
     files = drive.files().list(q=q, fields="files(id)", pageSize=1).execute(num_retries=3).get("files", [])
     if not files:
         return pd.DataFrame(columns=ORDERLINES_COLS)
-    df = pd.read_csv(io.BytesIO(download_bytes(drive, files[0]["id"])), dtype={"productId": str})
+    df = pd.read_csv(io.BytesIO(download_bytes(drive, files[0]["id"])),
+                     dtype={"productId": str, "order_id": str})
+    if "order_id" not in df.columns:  # ältere Bestände ohne Bestellnummer
+        df["order_id"] = pd.NA
     return df
 
 

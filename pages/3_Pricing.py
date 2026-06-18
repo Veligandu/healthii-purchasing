@@ -1355,3 +1355,45 @@ with tab_produkt:
                              alt.Tooltip("Preis:Q", format=".2f", title="Preis (€)")],
                 )
                 st.altair_chart(line, use_container_width=True)
+
+                # ── Warenkörbe mit diesem Produkt ──
+                st.divider()
+                st.markdown("##### Warenkörbe mit diesem Produkt")
+                if ol_p.empty or "order_id" not in ol_p.columns or ol_p["order_id"].isna().all():
+                    st.info("Keine Bestellnummern in den Orderlines – bitte Orderlines mit "
+                            "OrderNumber-Spalte (neu) hochladen.")
+                else:
+                    olb = ol_p.dropna(subset=["order_id"])
+                    orders = olb[olb["productId"] == pzn]["order_id"].unique()
+                    if len(orders) == 0:
+                        st.info("Dieses Produkt kommt in keinem Warenkorb mit Bestellnummer vor.")
+                    else:
+                        sub = olb[olb["order_id"].isin(orders)].copy()
+                        basket = sub.groupby("order_id").agg(
+                            datum=("date", "max"), wert=("net", "sum"), pos=("productId", "count"))
+                        thisv = sub[sub["productId"] == pzn].groupby("order_id")["net"].sum()
+                        basket["andere"] = basket["wert"] - basket.index.map(thisv).fillna(0.0)
+
+                        b1, b2, b3 = st.columns(3)
+                        b1.metric("Warenkörbe mit Produkt", f"{len(basket):,}".replace(",", "."))
+                        b2.metric("Ø Warenkorbwert", f"{basket['wert'].mean():.2f} €")
+                        b3.metric("Ø Wert mitgekaufter Artikel", f"{basket['andere'].mean():.2f} €")
+
+                        co = (sub[sub["productId"] != pzn].groupby("order_id")["productname"]
+                              .apply(lambda s: ", ".join(s.dropna().astype(str))))
+                        st.markdown("##### Letzte 50 Warenkörbe")
+                        last = basket.sort_values("datum", ascending=False).head(50).reset_index()
+                        last["Mitgekaufte Artikel"] = last["order_id"].map(co).fillna("—")
+                        last["datum"] = pd.to_datetime(last["datum"]).dt.strftime("%d.%m.%Y")
+                        last["wert"] = last["wert"].round(2)
+                        last = last.rename(columns={
+                            "order_id": "Bestellnr.", "datum": "Datum",
+                            "pos": "Positionen", "wert": "Warenkorbwert €"})
+                        st.dataframe(
+                            last[["Datum", "Bestellnr.", "Positionen", "Warenkorbwert €", "Mitgekaufte Artikel"]],
+                            use_container_width=True, hide_index=True,
+                            column_config={
+                                "Positionen": st.column_config.NumberColumn(format="%d"),
+                                "Warenkorbwert €": st.column_config.NumberColumn(format="%.2f €"),
+                            },
+                        )
