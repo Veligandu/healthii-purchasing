@@ -1376,8 +1376,8 @@ with tab_produkt:
 
                         b1, b2, b3 = st.columns(3)
                         b1.metric("Warenkörbe mit Produkt", f"{len(basket):,}".replace(",", "."))
-                        b2.metric("Ø Warenkorbwert", f"{basket['wert'].mean():.2f} €")
-                        b3.metric("Ø Wert mitgekaufter Artikel", f"{basket['andere'].mean():.2f} €")
+                        b2.metric("Ø Warenkorbwert (netto)", f"{basket['wert'].mean():.2f} €")
+                        b3.metric("Ø mitgekaufter Wert (netto)", f"{basket['andere'].mean():.2f} €")
 
                         co = (sub[sub["productId"] != pzn].groupby("order_id")["productname"]
                               .apply(lambda s: ", ".join(s.dropna().astype(str))))
@@ -1388,12 +1388,13 @@ with tab_produkt:
                         last["wert"] = last["wert"].round(2)
                         last = last.rename(columns={
                             "order_id": "Bestellnr.", "datum": "Datum",
-                            "pos": "Positionen", "wert": "Warenkorbwert €"})
+                            "pos": "Positionen", "wert": "Warenkorbwert netto €"})
                         st.dataframe(
-                            last[["Datum", "Bestellnr.", "Positionen", "Warenkorbwert €", "Mitgekaufte Artikel"]],
+                            last[["Datum", "Bestellnr.", "Positionen", "Warenkorbwert netto €", "Mitgekaufte Artikel"]],
                             use_container_width=True, hide_index=True,
                             column_config={
                                 "Positionen": st.column_config.NumberColumn(format="%d"),
-                                "Warenkorbwert €": st.column_config.NumberColumn(format="%.2f €"),
+                                "Warenkorbwert netto €": st.column_config.NumberColumn(format="%.2f €"),
                             },
                         )
+                        st.caption("Alle Warenkorbwerte sind Netto-Werte (TotalNet).")
