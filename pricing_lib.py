@@ -35,7 +35,14 @@ PRICE_LABELS = ["0–10 €", "10–25 €", "25–50 €", "50–100 €", "100
 # Orderlines (Abverkauf)
 ORDERLINES_FILE = "orderlines.csv"
 ORDERLINES_COLS = ["productId", "productname", "type", "source", "order_id", "date",
-                   "quantity", "net", "ek", "margin"]
+                   "quantity", "net", "tax", "ek", "margin"]
+
+# CM2-Parameter
+CM2_OPEX = 0.04            # variable Operationskosten (Anteil vom Netto)
+CM2_PAYMENT = 0.02         # Payment (Anteil vom Netto)
+CM2_FRACHT = 4.0           # Verpackung & Versand je Warenkorb (€)
+CM2_KLEIN_GEBUEHR = 2.44   # erhobene Versandgebühr bei Warenkörben < Schwelle (€)
+CM2_KLEIN_SCHWELLE = 25.0  # Brutto-Warenkorbwert (TotalNet+TotalTax), unter dem die Gebühr greift
 
 # Konfiguration (Channel-Bezeichnungen + Source-Zuordnung), persistent in Drive
 CONFIG_FILE = "pricing_config.json"
@@ -287,6 +294,7 @@ def parse_orderlines_bytes(data: bytes) -> pd.DataFrame:
     out["date"] = df["CreatedAt: Tag"].map(_parse_de_date)
     out["quantity"] = pd.to_numeric(df.get("Quantity"), errors="coerce")
     out["net"] = _de_num(df["TotalNet"]) if "TotalNet" in df.columns else pd.NA
+    out["tax"] = _de_num(df["TotalTax"]) if "TotalTax" in df.columns else pd.NA
     out["ek"] = _de_num(df["Unit Ek Net"]) if "Unit Ek Net" in df.columns else pd.NA
     out["margin"] = _de_num(df["Relative Margin (€)"]) if "Relative Margin (€)" in df.columns else pd.NA
     out = out[out["productId"].notna() & out["date"].notna() & out["quantity"].notna()]
@@ -304,7 +312,28 @@ def load_orderlines(drive) -> pd.DataFrame:
                      dtype={"productId": str, "order_id": str})
     if "order_id" not in df.columns:  # ältere Bestände ohne Bestellnummer
         df["order_id"] = pd.NA
+    if "tax" not in df.columns:        # ältere Bestände ohne TotalTax
+        df["tax"] = pd.NA
     return df
+
+
+def basket_cm2(orderlines: pd.DataFrame) -> pd.Series:
+    """CM2 je Warenkorb (order_id) aus Orderline-Zeilen.
+
+    CM2 = Rohmarge € − (Opex+Payment) × Netto − Fracht
+          + Versandgebühr, falls Brutto-Warenkorbwert (Netto+Steuer) < Schwelle.
+    Rückgabe: Series order_id → cm2 (€).
+    """
+    df = orderlines.copy()
+    df["_marge"] = pd.to_numeric(df["margin"], errors="coerce") * pd.to_numeric(df["net"], errors="coerce")
+    if "tax" not in df.columns:
+        df["tax"] = 0.0
+    g = df.groupby("order_id").agg(
+        net=("net", "sum"), tax=("tax", "sum"), marge=("_marge", "sum"))
+    brutto = g["net"] + g["tax"].fillna(0.0)
+    cm2 = g["marge"] - (CM2_OPEX + CM2_PAYMENT) * g["net"] - CM2_FRACHT
+    cm2 = cm2 + (brutto < CM2_KLEIN_SCHWELLE).astype(float) * CM2_KLEIN_GEBUEHR
+    return cm2
 
 
 def merge_orderlines(existing: pd.DataFrame, neu: pd.DataFrame) -> pd.DataFrame:

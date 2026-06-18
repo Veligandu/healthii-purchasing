@@ -981,12 +981,10 @@ with tab_sales:
             prod_cm2 = pd.Series(dtype=float)
             if "order_id" in ol_range.columns and ol_range["order_id"].notna().any():
                 olc = ol_range[ol_range["order_id"].notna()].copy()
-                olc["_marge_eur"] = pd.to_numeric(olc["margin"], errors="coerce") * olc["net"]
-                bk = olc.groupby("order_id").agg(net=("net", "sum"), marge=("_marge_eur", "sum"))
-                bk["cm2"] = bk["marge"] - 0.06 * bk["net"] - 4.0
-                olc = olc.drop_duplicates(["productId", "order_id"]).merge(
-                    bk["cm2"], left_on="order_id", right_index=True)
-                prod_cm2 = olc.groupby("productId")["cm2"].mean()
+                cm2_order = pl.basket_cm2(olc)
+                occ = olc.drop_duplicates(["productId", "order_id"]).copy()
+                occ["cm2"] = occ["order_id"].map(cm2_order)
+                prod_cm2 = occ.groupby("productId")["cm2"].mean()
             renner["Ø CM2 / Warenkorb"] = renner["productId"].map(prod_cm2).round(2)
 
             k1, k2, k3 = st.columns(3)
@@ -1020,28 +1018,30 @@ with tab_sales:
                 file_name=f"rennerliste_{ch.replace(' ', '_').lower()}.xlsx", key="ab_dl_a",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-            # ── Ø Warenkorb-CM2 je Preisklasse (Netto-Warenkorbwert) ──
+            # ── Ø Warenkorb-CM2 je Produkt-Preisklasse ──
             if "order_id" in ol_range.columns and ol_range["order_id"].notna().any():
-                st.markdown("##### Ø Warenkorb-CM2 je Preisklasse")
-                bkc = ol_range[ol_range["order_id"].notna()].copy()
-                bkc["_m"] = pd.to_numeric(bkc["margin"], errors="coerce") * bkc["net"]
-                bb = bkc.groupby("order_id").agg(net=("net", "sum"), marge=("_m", "sum"))
-                bb["cm2"] = bb["marge"] - 0.06 * bb["net"] - 4.0
+                st.markdown("##### Ø Warenkorb-CM2 je Produkt-Preisklasse")
+                olc2 = ol_range[ol_range["order_id"].notna() & (ol_range["quantity"] > 0)].copy()
+                cm2_order2 = pl.basket_cm2(olc2)
+                occ2 = olc2.drop_duplicates(["productId", "order_id"]).copy()
+                occ2["unit"] = pd.to_numeric(occ2["net"], errors="coerce") / occ2["quantity"]
+                occ2["cm2"] = occ2["order_id"].map(cm2_order2)
                 pk_edges = [1, 5, 10, 15, 20, 25, 30, 35, 40, 50, 75, 100, float("inf")]
                 pk_labels = ["1–5", "5–10", "10–15", "15–20", "20–25", "25–30",
                              "30–35", "35–40", "40–50", "50–75", "75–100", ">100"]
-                bb["Preisklasse"] = pd.cut(bb["net"], bins=pk_edges, labels=pk_labels, right=False)
-                pk = bb.groupby("Preisklasse", observed=False).agg(
+                occ2["Preisklasse"] = pd.cut(occ2["unit"], bins=pk_edges, labels=pk_labels, right=False)
+                pk = occ2.groupby("Preisklasse", observed=False).agg(
                     cm2=("cm2", "mean"), n=("cm2", "size")).reset_index()
                 bars = alt.Chart(pk).mark_bar(color="#0D9488").encode(
-                    x=alt.X("Preisklasse:N", sort=pk_labels, title="Warenkorbwert (netto, €)"),
+                    x=alt.X("Preisklasse:N", sort=pk_labels, title="Produktpreis (netto/Stück, €)"),
                     y=alt.Y("cm2:Q", title="Ø CM2 / Warenkorb (€)"),
                     tooltip=[alt.Tooltip("Preisklasse:N", title="Klasse"),
                              alt.Tooltip("cm2:Q", format=".2f", title="Ø CM2 €"),
-                             alt.Tooltip("n:Q", title="Warenkörbe")],
+                             alt.Tooltip("n:Q", title="Produkt-Warenkörbe")],
                 )
                 st.altair_chart(bars, use_container_width=True)
-                st.caption("Alle Warenkörbe im gewählten Zeitraum, gruppiert nach Netto-Warenkorbwert.")
+                st.caption("Produkte im gewählten Zeitraum nach Netto-Stückpreis klassifiziert; "
+                           "je Produktvorkommen der CM2 des gesamten Warenkorbs.")
 
         # ── B) Preisänderungs-Wirkung ──────────────────────────────────────────
     with sub_b:
@@ -1438,18 +1438,13 @@ with tab_produkt:
                         basket["andere"] = basket["wert"] - basket.index.map(thisv).fillna(0.0)
                         basket["rel_marge"] = basket["marge_eur"] / basket["wert"]
 
-                        # CM2 je Warenkorb: Rohmarge € − (Opex+Payment) × Netto − Fracht
-                        # (marge_eur = Warenkorbmarge × Netto-Warenkorbwert)
-                        CM2_OPEX, CM2_PAYMENT, CM2_FRACHT = 0.04, 0.02, 4.0
-                        basket["cm2"] = (basket["marge_eur"]
-                                         - (CM2_OPEX + CM2_PAYMENT) * basket["wert"]
-                                         - CM2_FRACHT)
+                        basket["cm2"] = pl.basket_cm2(sub)
 
                         cm2_hilfe = (
-                            "CM2 je Warenkorb = Warenkorbmarge × Netto-Warenkorbwert "
-                            "− (4 % variable Operationskosten + 2 % Payment) × Netto-Warenkorbwert "
-                            "− 4 € (Verpackung & Versand). "
-                            "Warenkorbmarge × Netto-Warenkorbwert ist die Rohmarge in € (Σ Marge × Netto je Artikel). "
+                            "CM2 je Warenkorb = Rohmarge € − (4 % variable Operationskosten + 2 % Payment) "
+                            "× Netto-Warenkorbwert − 4 € (Verpackung & Versand); "
+                            "+ 2,44 € Versandgebühr, wenn der Brutto-Warenkorbwert (Netto+MwSt) < 25 € ist. "
+                            "Rohmarge € = Σ Marge × Netto je Artikel. "
                             "Der KPI ist der Durchschnitt über alle Warenkörbe mit diesem Produkt."
                         )
 
