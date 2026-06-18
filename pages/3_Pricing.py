@@ -1474,3 +1474,20 @@ with tab_produkt:
                             },
                         )
                         st.caption("Alle Warenkorbwerte sind Netto-Werte (TotalNet).")
+
+                        # ── Source-Verteilung der Warenkörbe ──
+                        st.divider()
+                        st.markdown("##### Warenkörbe nach Source")
+                        src = sub.groupby("order_id")["source"].first()
+                        src_counts = (src.value_counts().rename_axis("Source")
+                                      .reset_index(name="Warenkörbe"))
+                        src_counts["Anteil"] = (src_counts["Warenkörbe"]
+                                                / src_counts["Warenkörbe"].sum() * 100).round(1)
+                        pie = alt.Chart(src_counts).mark_arc().encode(
+                            theta=alt.Theta("Warenkörbe:Q", stack=True),
+                            color=alt.Color("Source:N", title="Source"),
+                            tooltip=[alt.Tooltip("Source:N", title="Source"),
+                                     alt.Tooltip("Warenkörbe:Q", title="Warenkörbe"),
+                                     alt.Tooltip("Anteil:Q", format=".1f", title="Anteil %")],
+                        )
+                        st.altair_chart(pie, use_container_width=True)
