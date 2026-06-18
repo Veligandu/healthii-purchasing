@@ -207,7 +207,9 @@ def load_channel(_drive, iso_datum: str):
 
 @st.cache_data(ttl=60, show_spinner="Orderlines werden geladen …")
 def load_orderlines(_drive):
-    return pl.load_orderlines(_drive)
+    df = pl.load_orderlines(_drive)
+    df["d"] = pd.to_datetime(df["date"], errors="coerce")  # einmalig je Cache, nicht je Rerun
+    return df
 
 @st.cache_data(ttl=60, show_spinner=False)
 def load_config(_drive):
@@ -936,7 +938,6 @@ with tab_sales:
     if not ol.empty:
         ol = ol.copy()
         ol["ref"] = ol["source"].map(lambda s: ref_for_source(s, source_map))
-        ol["d"] = pd.to_datetime(ol["date"], errors="coerce")
         ol = ol[ol["d"].notna()]
         namen = ol.groupby("productId")["productname"].first()
 
@@ -1335,8 +1336,10 @@ with tab_sales:
 
 # ════════════════════════════════════════════════════════════════════════════════
 # TAB 5 – Produktansicht (eine PZN: aktuelle Preise + Preisverlauf je Channel)
+# st.fragment: Eingaben (PZN/Datum) rendern nur diesen Bereich neu, nicht alle Tabs.
 # ════════════════════════════════════════════════════════════════════════════════
-with tab_produkt:
+@st.fragment
+def render_produktansicht():
     snaps = list_snapshots(drive)
     if not snaps:
         st.info("Noch keine Daten vorhanden. Bitte links in der Seitenleiste Preise hochladen.")
@@ -1409,8 +1412,6 @@ with tab_produkt:
                     st.info("Keine Bestellnummern in den Orderlines – bitte Orderlines mit "
                             "OrderNumber-Spalte (neu) hochladen.")
                 else:
-                    ol_p = ol_p.copy()
-                    ol_p["d"] = pd.to_datetime(ol_p["date"], errors="coerce")
                     pdmin, pdmax = ol_p["d"].min().date(), ol_p["d"].max().date()
                     pdef_von = max(pdmin, (ol_p["d"].max() - pd.Timedelta(days=29)).date())
                     pr1, pr2 = st.columns(2)
@@ -1491,3 +1492,7 @@ with tab_produkt:
                                      alt.Tooltip("Anteil:Q", format=".1f", title="Anteil %")],
                         )
                         st.altair_chart(pie, use_container_width=True)
+
+
+with tab_produkt:
+    render_produktansicht()
