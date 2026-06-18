@@ -181,7 +181,7 @@ def injiziere_neuanlagen(df_bestellen, neuanlagen_df):
         zeile.update({
             "Pzn":          pzn,
             "Hersteller":   herst,
-            "Artikelname":  str(na.get("Artikelname") or "") or "🆕 Neuanlage",
+            "Artikelname":  str(na.get("Artikelname") or "") or "Neuanlage",
             "Bestellmenge": menge,
             "Bestellwert":  0.0,
             "Neuanlage":    True,
@@ -366,7 +366,7 @@ def speichere_historie(df_input, df_bestellen, drive=None):
 
 st.set_page_config(
     page_title="Healthii Purchasing",
-    page_icon="🛒",
+    page_icon=":material/shopping_cart:",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -583,6 +583,18 @@ st.markdown("""
 
     /* Caption text */
     .stCaption, [data-testid="stCaptionContainer"] { color: #9CA3AF; font-size: 12px; }
+
+    /* Flat Material-Icons standardmäßig neutral dunkelgrau */
+    span[data-testid="stIconMaterial"] { color: #2C2C2A; vertical-align: middle; }
+
+    /* Großes Icon für leere Zustände */
+    .material-symbols-rounded {
+        font-family: 'Material Symbols Rounded';
+        font-weight: normal; font-style: normal;
+        line-height: 1; letter-spacing: normal; text-transform: none;
+        display: inline-block; white-space: nowrap; word-wrap: normal;
+        direction: ltr; -webkit-font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -703,7 +715,8 @@ st.markdown(f"""
     </div>
     <div style='display:flex;align-items:center;gap:16px;'>
         <span style='color:#6B7280;font-size:13px;'>
-            📅 {heute.strftime('%d.%m.%Y')} &nbsp;·&nbsp; KW{kw:02d}/{year}
+            <span class='material-symbols-rounded' style='font-size:16px;vertical-align:-3px;'>calendar_today</span>
+            {heute.strftime('%d.%m.%Y')} &nbsp;·&nbsp; KW{kw:02d}/{year}
         </span>
         <span style='font-size:12px;color:{drive_status_color};font-weight:500;'>
             ● {drive_status_text}
@@ -715,7 +728,7 @@ st.markdown(f"""
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.header("📂 Wiederbestellung")
+    st.header(":material/folder_open: Wiederbestellung")
 
     uploaded = st.file_uploader(
         "wiederbestellung.xlsx hochladen",
@@ -743,14 +756,14 @@ with st.sidebar:
             st.session_state.uploaded_filename = uploaded.name
             st.session_state.ergebnis          = None
             st.session_state.df_bestellen_edit = None
-        st.caption(f"✅ {uploaded.name}")
+        st.caption(f":material/check_circle: {uploaded.name}")
 
     elif st.session_state.get("uploaded_filename"):
-        st.caption(f"✅ {st.session_state.uploaded_filename} (aus Drive)")
+        st.caption(f":material/check_circle: {st.session_state.uploaded_filename} (aus Drive)")
 
     # Berechnen-Button
     if st.session_state.get("excel_bytes_input"):
-        if st.button("▶ Berechnen", use_container_width=True, type="primary"):
+        if st.button(":material/play_arrow: Berechnen", use_container_width=True, type="primary"):
             st.session_state["excel_out"] = None  # altes Excel verwerfen
             with st.spinner("Berechne …"):
                 letzte_bestellung_df = lade_letzte_bestellung_fuer_berechnung(st.session_state.drive)
@@ -794,19 +807,19 @@ with st.sidebar:
     st.divider()
 
     # ── Letzte Bestellung Status ──
-    st.header("📋 Letzte Bestellung")
+    st.header(":material/receipt_long: Letzte Bestellung")
     hist_name, df_hist_sidebar = lade_historie_cached()
     if df_hist_sidebar is not None:
         n_gesamt = len(df_hist_sidebar)
         n_offen  = len(df_hist_sidebar[
             df_hist_sidebar["eingelagert"].astype(str).str.strip().str.lower() == "nein"
         ])
-        st.caption(f"📄 {hist_name}")
+        st.caption(f":material/description: {hist_name}")
         c1, c2 = st.columns(2)
         c1.metric("Offen", n_offen, help="Noch nicht eingelagert")
         c2.metric("Eingelagert", n_gesamt - n_offen)
         if n_offen > 0:
-            st.caption("✏️ Zum Bearbeiten → Tab **Bestellhistorie**")
+            st.caption(":material/edit: Zum Bearbeiten → Tab **Bestellhistorie**")
     else:
         st.info("Keine Bestellhistorie gefunden")
 
@@ -833,11 +846,11 @@ if ergebnis is not None:
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🛒 Bestellvorschläge",
-    "⚠️ Unter MBW – nicht bestellt",
-    "📋 Bestellhistorie",
-    "📁 Bestellarchiv",
-    "🆕 Neuanlagen",
+    ":material/shopping_cart: Bestellvorschläge",
+    ":material/warning: Unter MBW – nicht bestellt",
+    ":material/receipt_long: Bestellhistorie",
+    ":material/folder: Bestellarchiv",
+    ":material/fiber_new: Neuanlagen",
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -846,7 +859,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 
 with tab1:
     # ── Algorithmus-Einstellungen ──────────────────────────────────────────────
-    with st.expander("⚙️ Algorithmus"):
+    with st.expander(":material/settings: Algorithmus"):
 
         # MBW-Ausnahmen laden (außerhalb des Forms — data_editor nicht in st.form möglich)
         # Einmalig aus Drive laden und im Session State halten
@@ -917,7 +930,7 @@ with tab1:
                     help="Mindestreichweite die nach Reduktion noch erfüllt sein muss",
                 )
 
-            _submitted = st.form_submit_button("💾 Einstellungen speichern",
+            _submitted = st.form_submit_button(":material/save: Einstellungen speichern",
                                                use_container_width=True, type="primary")
 
         if _submitted:
@@ -930,7 +943,7 @@ with tab1:
             if _drive_mbw:
                 try:
                     _auto_save_algo()
-                    st.success("✓ Einstellungen gespeichert")
+                    st.success("Einstellungen gespeichert", icon=":material/check_circle:")
                 except Exception as _e:
                     st.error(f"Fehler: {_e}")
             else:
@@ -940,7 +953,7 @@ with tab1:
         st.divider()
         st.caption("**Hersteller-Ausnahmen (mbw_exceptions.csv)**")
         if st.session_state.pop("_mbw_saved", False):
-            st.success("✓ MBW-Ausnahmen gespeichert")
+            st.success("MBW-Ausnahmen gespeichert", icon=":material/check_circle:")
         _mbw_edited = st.data_editor(
             _mbw_df_current,
             column_config={
@@ -952,7 +965,7 @@ with tab1:
             hide_index=True,
             key="mbw_exceptions_editor",
         )
-        if st.button("💾 MBW-Ausnahmen speichern", use_container_width=True):
+        if st.button(":material/save: MBW-Ausnahmen speichern", use_container_width=True):
             if _drive_mbw:
                 try:
                     from googleapiclient.http import MediaIoBaseUpload as _MIU
@@ -987,7 +1000,7 @@ with tab1:
     if ergebnis is None:
         st.markdown("""
         <div style='text-align:center;padding:60px 0;color:#9CA3AF;'>
-            <div style='font-size:48px;'>📄</div>
+            <div><span class='material-symbols-rounded' style='font-size:48px;color:#CBD5E1;'>description</span></div>
             <div style='font-size:16px;margin-top:12px;'>
                 Datei hochladen und <b>Berechnen</b> klicken
             </div>
@@ -1034,7 +1047,7 @@ with tab1:
         df_display.insert(0, "🗑", False)
 
         col_config["🗑"] = st.column_config.CheckboxColumn(
-            "🗑", help="Zeile zum Löschen markieren", width="small"
+            "Entf.", help="Zeile zum Löschen markieren", width="small"
         )
 
         # Neuanlage-Maske positionsgleich zu df_display (gleiche Zeilenreihenfolge)
@@ -1077,7 +1090,7 @@ with tab1:
             st.rerun()
 
         _markiert = edited["🗑"].sum()
-        _btn_label = f"💾 Änderungen übernehmen{f'  ({_markiert} Zeile(n) löschen)' if _markiert else ''}"
+        _btn_label = f":material/save: Änderungen übernehmen{f'  ({_markiert} Zeile(n) löschen)' if _markiert else ''}"
         if st.button(_btn_label, type="primary"):
             # edited und df_full haben gleichen 0-basierten Index durch reset_index oben
             _df_full = st.session_state.df_bestellen_edit.copy().reset_index(drop=True)
@@ -1094,7 +1107,7 @@ with tab1:
                 speichere_edit_stand(st.session_state.drive)
             except Exception:
                 pass  # Drive-Sicherung optional, Session-Stand gilt trotzdem
-            st.success(f"✓ Übernommen{f' — {_markiert} Position(en) entfernt' if _markiert else ''}")
+            st.success(f"Übernommen{f' — {_markiert} Position(en) entfernt' if _markiert else ''}", icon=":material/check_circle:")
             st.rerun()
 
         st.divider()
@@ -1102,7 +1115,7 @@ with tab1:
         # ── Berechnungslog strukturiert ───────────────────────────────────────
         _ts = st.session_state.get("ergebnis_timestamp", "")
         _hl = ergebnis.get("hersteller_log", {})
-        _log_label = f"🔍 Berechnungslog{'  —  ' + _ts if _ts else ''}"
+        _log_label = f":material/search: Berechnungslog{'  —  ' + _ts if _ts else ''}"
 
         with st.expander(_log_label, expanded=False):
             if not _hl:
@@ -1119,7 +1132,9 @@ with tab1:
 
                 for _hersteller, _info in _sorted:
                     _st   = _info["status"]
-                    _icon = "✅" if _st == "bestellen" else ("⚠️" if _st == "unter_mbw" else "—")
+                    _icon = (":green[:material/check_circle:]" if _st == "bestellen"
+                             else (":orange[:material/warning:]" if _st == "unter_mbw"
+                                   else ":gray[:material/remove:]"))
                     _bw   = _info["bestellwert"]
                     _mbw  = _info["mbw"]
                     _fb   = _info["fehlbetrag"]
@@ -1176,7 +1191,7 @@ with tab1:
         col_dl, col_save = st.columns(2)
 
         with col_dl:
-            if st.button("🔄 Excel erstellen", use_container_width=True, type="primary"):
+            if st.button(":material/sync: Excel erstellen", use_container_width=True, type="primary"):
                 with st.spinner("Erstelle Excel …"):
                     ergebnis_export = dict(ergebnis)
                     _df_export = _stelle_mbw_wieder_her(
@@ -1187,7 +1202,7 @@ with tab1:
 
             if st.session_state.get("excel_out"):
                 st.download_button(
-                    label="📥 Purchase-Order herunterladen",
+                    label=":material/download: Purchase-Order herunterladen",
                     data=st.session_state["excel_out"],
                     file_name=f"Purchase-Order-KW{kw:02d}-{year}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1195,7 +1210,7 @@ with tab1:
                 )
 
         with col_save:
-            if st.button("💾 Abschließen & in Drive archivieren", use_container_width=True):
+            if st.button(":material/save: Abschließen & in Drive archivieren", use_container_width=True):
                 with st.spinner("Speichere …"):
                     try:
                         df_final   = st.session_state.df_bestellen_edit
@@ -1222,9 +1237,9 @@ with tab1:
                                 drive_conn, _excel_bytes, order_name, week_folder_id,
                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             )
-                            st.success(f"✓ Lokal & Drive gespeichert: {order_name}")
+                            st.success(f"Lokal & Drive gespeichert: {order_name}", icon=":material/check_circle:")
                         else:
-                            st.success(f"✓ Lokal gespeichert: {order_name}")
+                            st.success(f"Lokal gespeichert: {order_name}", icon=":material/check_circle:")
 
                         # Session zurücksetzen
                         st.session_state.ergebnis          = None
@@ -1243,13 +1258,13 @@ with tab2:
     if ergebnis is None:
         st.markdown("""
         <div style='text-align:center;padding:60px 0;color:#9CA3AF;'>
-            <div style='font-size:48px;'>📄</div>
+            <div><span class='material-symbols-rounded' style='font-size:48px;color:#CBD5E1;'>description</span></div>
             <div style='font-size:16px;margin-top:12px;'>
                 Bitte <b>wiederbestellung.xlsx</b> in der Seitenleiste hochladen
             </div>
         </div>""", unsafe_allow_html=True)
     elif df_unter_mbw.empty:
-        st.success("✅ Alle Hersteller erreichen den Mindestbestellwert.")
+        st.success("Alle Hersteller erreichen den Mindestbestellwert.", icon=":material/check_circle:")
     else:
         gesamt_potential = df_unter_mbw["Bestellwert"].sum()
         st.warning(
@@ -1297,7 +1312,7 @@ with tab3:
     if df_hist is None:
         st.info("Noch keine Bestellhistorie vorhanden.")
     else:
-        st.subheader(f"📄 {hist_name_t3}")
+        st.subheader(f":material/description: {hist_name_t3}")
 
         df_hist["Pzn"] = df_hist["Pzn"].apply(
             lambda x: str(int(float(x))) if pd.notna(x) else ""
@@ -1316,7 +1331,7 @@ with tab3:
         col_info, col_reload, col_alle = st.columns([3, 1, 1])
         col_info.caption(f"{n_offen} von {len(df_hist)} Positionen noch nicht eingelagert")
         with col_reload:
-            if st.button("🔄 Neu laden", use_container_width=True):
+            if st.button(":material/refresh: Neu laden", use_container_width=True):
                 lade_historie_cached(force=True)
                 st.rerun()
 
@@ -1363,12 +1378,12 @@ with tab3:
             raise _last_exc  # Alle Versuche fehlgeschlagen
 
         with col_alle:
-            if st.button("✅ Alle einlagern", use_container_width=True):
+            if st.button(":material/inventory: Alle einlagern", use_container_width=True):
                 df_hist["eingelagert"] = "ja"
                 with st.spinner("Speichere …"):
                     _speichere_historie_drive(df_hist, hist_name_t3)
                 st.session_state["_hist_cache"] = (hist_name_t3, df_hist)
-                st.success("✓ Alle Positionen eingelagert & in Drive gespeichert")
+                st.success("Alle Positionen eingelagert & in Drive gespeichert", icon=":material/check_circle:")
                 st.rerun()
 
         edited_hist = st.data_editor(
@@ -1390,12 +1405,12 @@ with tab3:
             key="editor_historie",
         )
 
-        if st.button("💾 Änderungen speichern", type="primary"):
+        if st.button(":material/save: Änderungen speichern", type="primary"):
             df_hist[hist_cols] = edited_hist
             with st.spinner("Speichere …"):
                 _speichere_historie_drive(df_hist, hist_name_t3)
             st.session_state["_hist_cache"] = (hist_name_t3, df_hist)
-            st.success("✓ Bestellhistorie in Drive gespeichert")
+            st.success("Bestellhistorie in Drive gespeichert", icon=":material/check_circle:")
             st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1489,7 +1504,7 @@ with tab4:
                 while not done:
                     _, done = dl.next_chunk()
                 st.download_button(
-                    label="📥 Excel herunterladen",
+                    label=":material/download: Excel herunterladen",
                     data=buf_dl.getvalue(),
                     file_name=ausgewählt,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1532,7 +1547,7 @@ with tab5:
                     help="Erst nach einer Berechnung stehen die bekannten Hersteller zur Auswahl",
                 )
 
-        _na_submit = st.form_submit_button("➕ Hinzufügen", type="primary", use_container_width=True)
+        _na_submit = st.form_submit_button(":material/add: Hinzufügen", type="primary", use_container_width=True)
 
     if _na_submit:
         _pzn_clean = str(_na_pzn).strip()
@@ -1549,7 +1564,7 @@ with tab5:
             _na_df = pd.concat([_na_df, _neu], ignore_index=True)
             try:
                 speichere_neuanlagen(_drive_na, _na_df)
-                st.success(f"✓ {_pzn_clean} ({_herst_clean}) hinzugefügt")
+                st.success(f"{_pzn_clean} ({_herst_clean}) hinzugefügt", icon=":material/check_circle:")
                 st.rerun()
             except Exception as _e:
                 st.error(f"Fehler beim Speichern: {_e}")
@@ -1572,14 +1587,14 @@ with tab5:
             hide_index=True,
             key="neuanlagen_editor",
         )
-        if st.button("💾 Neuanlagen speichern", type="primary"):
+        if st.button(":material/save: Neuanlagen speichern", type="primary"):
             try:
                 _na_save = _na_edit.copy()
                 _na_save["Artikelname"] = ""
                 _na_save["Wunschmenge"] = 1
                 speichere_neuanlagen(_drive_na, _na_save)
                 st.session_state.pop("neuanlagen_editor", None)
-                st.success("✓ Neuanlagen gespeichert")
+                st.success("Neuanlagen gespeichert", icon=":material/check_circle:")
                 st.rerun()
             except Exception as _e:
                 st.error(f"Fehler beim Speichern: {_e}")
