@@ -949,26 +949,45 @@ with tab_sales:
         if ol.empty:
             st.info("Noch keine Orderlines vorhanden. Bitte links in der Seitenleiste hochladen.")
         else:
-            dmin, dmax = ol["d"].min(), ol["d"].max()
-            st.caption(
-                f"Datenbasis: {len(ol):,} Orderlines · {dmin:%d.%m.%Y} – {dmax:%d.%m.%Y}".replace(",", ".")
-            )
-            present_refs = [r for r in (CHANNEL_COLS + [REF_QUOTE]) if r in set(ol["ref"])]
-            label_to_ref = {ref_label(r, cfg): r for r in present_refs}
-            fc1, fc2 = st.columns([1, 1])
-            with fc1:
-                ch = st.selectbox("Channel", ["Alle Channels"] + list(label_to_ref.keys()),
-                                  key="ab_rl_ch")
-            with fc2:
+            dmin, dmax = ol["d"].min().date(), ol["d"].max().date()
+            default_von = max(dmin, (ol["d"].max() - pd.Timedelta(days=29)).date())
+            r1, r2, r3 = st.columns([1, 1, 1])
+            with r1:
+                von_r = r1.date_input("Von", value=default_von, min_value=dmin, max_value=dmax,
+                                      format="DD.MM.YYYY", key="ab_rl_von")
+            with r2:
+                bis_r = r2.date_input("Bis", value=dmax, min_value=dmin, max_value=dmax,
+                                      format="DD.MM.YYYY", key="ab_rl_bis")
+            with r3:
                 topn = st.slider("Top N", 10, 200, 50, step=10, key="ab_rl_n")
 
-            data = ol if ch == "Alle Channels" else ol[ol["ref"] == label_to_ref[ch]]
+            ol_range = ol[(ol["d"] >= pd.Timestamp(von_r)) & (ol["d"] <= pd.Timestamp(bis_r))]
+            st.caption(
+                f"Datenbasis: {len(ol_range):,} Orderlines · {von_r:%d.%m.%Y} – {bis_r:%d.%m.%Y}".replace(",", ".")
+            )
+            present_refs = [r for r in (CHANNEL_COLS + [REF_QUOTE]) if r in set(ol_range["ref"])]
+            label_to_ref = {ref_label(r, cfg): r for r in present_refs}
+            ch = st.selectbox("Channel", ["Alle Channels"] + list(label_to_ref.keys()), key="ab_rl_ch")
+
+            data = ol_range if ch == "Alle Channels" else ol_range[ol_range["ref"] == label_to_ref[ch]]
             renner = data.groupby("productId").agg(
                 Produkt=("productname", "first"),
                 Umsatz=("net", "sum"),
                 Menge=("quantity", "sum"),
                 Bestellungen=("quantity", "count"),
             ).reset_index().sort_values("Umsatz", ascending=False)
+
+            # Ø CM2 je Warenkorb pro Produkt (Warenkorb-CM2 im gewählten Zeitraum, alle Channels)
+            prod_cm2 = pd.Series(dtype=float)
+            if "order_id" in ol_range.columns and ol_range["order_id"].notna().any():
+                olc = ol_range[ol_range["order_id"].notna()].copy()
+                olc["_marge_eur"] = pd.to_numeric(olc["margin"], errors="coerce") * olc["net"]
+                bk = olc.groupby("order_id").agg(net=("net", "sum"), marge=("_marge_eur", "sum"))
+                bk["cm2"] = bk["marge"] - 0.06 * bk["net"] - 4.0
+                olc = olc.drop_duplicates(["productId", "order_id"]).merge(
+                    bk["cm2"], left_on="order_id", right_index=True)
+                prod_cm2 = olc.groupby("productId")["cm2"].mean()
+            renner["Ø CM2 / Warenkorb"] = renner["productId"].map(prod_cm2).round(2)
 
             k1, k2, k3 = st.columns(3)
             k1.metric("Produkte", f"{len(renner):,}".replace(",", "."))
@@ -979,13 +998,17 @@ with tab_sales:
             show.insert(0, "Rang", range(1, len(show) + 1))
             show["Umsatz"] = show["Umsatz"].round(2)
             st.dataframe(
-                show[["Rang", "PZN", "Produkt", "Umsatz", "Menge", "Bestellungen"]],
+                show[["Rang", "PZN", "Produkt", "Umsatz", "Menge", "Bestellungen", "Ø CM2 / Warenkorb"]],
                 use_container_width=True, hide_index=True,
                 column_config={
                     "Rang": st.column_config.NumberColumn(format="%d"),
                     "Umsatz": st.column_config.NumberColumn(format="%.2f €"),
                     "Menge": st.column_config.NumberColumn(format="%d"),
                     "Bestellungen": st.column_config.NumberColumn(format="%d"),
+                    "Ø CM2 / Warenkorb": st.column_config.NumberColumn(
+                        format="%.2f €",
+                        help="Durchschnittlicher Warenkorb-CM2 der Warenkörbe im gewählten Zeitraum, "
+                             "die dieses Produkt enthalten. CM2 = Rohmarge € − 6 % × Netto − 4 €."),
                 },
             )
             buf = io.BytesIO()
@@ -1363,7 +1386,21 @@ with tab_produkt:
                     st.info("Keine Bestellnummern in den Orderlines – bitte Orderlines mit "
                             "OrderNumber-Spalte (neu) hochladen.")
                 else:
-                    olb = ol_p.dropna(subset=["order_id"])
+                    ol_p = ol_p.copy()
+                    ol_p["d"] = pd.to_datetime(ol_p["date"], errors="coerce")
+                    pdmin, pdmax = ol_p["d"].min().date(), ol_p["d"].max().date()
+                    pdef_von = max(pdmin, (ol_p["d"].max() - pd.Timedelta(days=29)).date())
+                    pr1, pr2 = st.columns(2)
+                    with pr1:
+                        pv_von = st.date_input("Von", value=pdef_von, min_value=pdmin, max_value=pdmax,
+                                               format="DD.MM.YYYY", key="pv_basket_von")
+                    with pr2:
+                        pv_bis = st.date_input("Bis", value=pdmax, min_value=pdmin, max_value=pdmax,
+                                               format="DD.MM.YYYY", key="pv_basket_bis")
+                    olb = ol_p[(ol_p["d"] >= pd.Timestamp(pv_von)) & (ol_p["d"] <= pd.Timestamp(pv_bis))
+                               & ol_p["order_id"].notna()]
+                    st.caption(f"Datenbasis: {len(olb):,} Orderlines · "
+                               f"{pv_von:%d.%m.%Y} – {pv_bis:%d.%m.%Y}".replace(",", "."))
                     orders = olb[olb["productId"] == pzn]["order_id"].unique()
                     if len(orders) == 0:
                         st.info("Dieses Produkt kommt in keinem Warenkorb mit Bestellnummer vor.")
