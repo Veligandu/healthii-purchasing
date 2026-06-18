@@ -223,36 +223,6 @@ def load_report(_drive, iso_datum):
 
 # ─── Orderlines-Verwaltung (Sidebar-Upload, Kalender-/Einstellungen-Popover) ─────
 
-def render_orderlines_upload(drive):
-    """Orderlines-Uploader + Modus + Übernehmen-Button (in der Sidebar)."""
-    up_file = st.file_uploader("Orderlines (CSV)", type=["csv"], key="sb_ol_up",
-                               help="Quelle: Metabase › Produkte & Hersteller › Pricing")
-    modus = st.radio(
-        "Modus", ["Nur neue Tage anhängen", "Doppelte Tage ersetzen"], key="sb_ol_mode",
-        help="Anhängen: vorhandene Tage bleiben unverändert. "
-             "Ersetzen: für Tage in der neuen Datei werden alte Zeilen überschrieben.",
-    )
-    ol_new = None
-    if up_file is not None:
-        try:
-            ol_new = parse_orderlines_bytes(up_file.getvalue())
-            st.success(f"{len(ol_new):,} Zeilen · "
-                       f"{ol_new['date'].min()} – {ol_new['date'].max()}".replace(",", "."))
-        except Exception as e:
-            st.error(f"Nicht lesbar: {e}")
-    if st.button(":material/add: Orderlines übernehmen", type="primary", use_container_width=True,
-                 disabled=ol_new is None, key="sb_ol_apply"):
-        mode = "replace" if modus == "Doppelte Tage ersetzen" else "append"
-        existing = pl.load_orderlines(drive)
-        combined = pl.apply_orderlines(existing, ol_new, mode)
-        folder_id = get_pricing_folder_id(drive)
-        upload_bytes_to_drive(drive, combined.to_csv(index=False).encode("utf-8"),
-                              pl.ORDERLINES_FILE, folder_id, "text/csv")
-        load_orderlines.clear()
-        st.success(f"Gespeichert: {len(combined):,} gesamt.".replace(",", "."))
-        st.rerun()
-
-
 def render_orderlines_calendar(drive):
     """Kalender-Jahresansicht der vorhandenen Tage + Zeitraum löschen (im Popover)."""
     ol = load_orderlines(drive)
@@ -385,8 +355,9 @@ source_map = cfg["source_map"]
 # SIDEBAR – Preisdateien hochladen
 # ════════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
-    st.header(":material/upload: Preise hochladen")
-    st.caption("Quote-, Channel- und Masterdatei eines Zeitpunkts. Datum wird aus dem Dateinamen erkannt.")
+    st.header(":material/upload: Daten Upload")
+    st.caption("Quote-, Channel-, Masterdatei (eines Zeitpunkts) und Orderlines. "
+               "Datum für Preise/Master wird aus dem Dateinamen erkannt.")
 
     quote_file = st.file_uploader("Quote-Preise (CSV)", type=["csv"], key="up_quote",
                                   help="Quelle: Google Drive › Pricing")
@@ -394,15 +365,23 @@ with st.sidebar:
                                     help="Quelle: Google Drive › Pricing")
     master_file = st.file_uploader("Masterdatei (CSV)", type=["csv"], key="up_master",
                                    help="Quelle: Download aus Channelpilot")
+    orderlines_file = st.file_uploader("Orderlines (CSV)", type=["csv"], key="up_orderlines",
+                                       help="Quelle: Metabase › Produkte & Hersteller › Pricing")
+    ol_modus = st.radio(
+        "Orderlines-Modus", ["Nur neue Tage anhängen", "Doppelte Tage ersetzen"], key="up_ol_mode",
+        help="Anhängen: vorhandene Tage bleiben unverändert. "
+             "Ersetzen: für Tage in der neuen Datei werden alte Zeilen überschrieben.",
+    )
 
-    # Datum vorbelegen aus Dateinamen
+    # Datum vorbelegen aus Dateinamen (Preise/Master)
     erkanntes_datum = None
     for f in (quote_file, channel_file, master_file):
         if f is not None:
             erkanntes_datum = parse_date_from_filename(f.name) or erkanntes_datum
 
     snap_datum = st.date_input(
-        "Datum des Snapshots", value=erkanntes_datum or date.today(), format="DD.MM.YYYY"
+        "Datum des Snapshots (Preise/Master)", value=erkanntes_datum or date.today(),
+        format="DD.MM.YYYY"
     )
 
     # Vorschau
@@ -427,9 +406,18 @@ with st.sidebar:
             st.success(f"Master: {len(master_reduced):,} Produkte".replace(",", "."))
         except Exception as e:
             st.error(f"Masterdatei nicht lesbar: {e}")
+    ol_new = None
+    if orderlines_file is not None:
+        try:
+            ol_new = parse_orderlines_bytes(orderlines_file.getvalue())
+            st.success(f"Orderlines: {len(ol_new):,} Zeilen "
+                       f"({ol_new['date'].min()} – {ol_new['date'].max()})".replace(",", "."))
+        except Exception as e:
+            st.error(f"Orderlines nicht lesbar: {e}")
 
     if st.button(":material/save: In Drive speichern", type="primary", use_container_width=True,
-                 disabled=(quote_file is None and channel_file is None and master_file is None)):
+                 disabled=(quote_file is None and channel_file is None
+                           and master_file is None and orderlines_file is None)):
         folder_id = get_pricing_folder_id(drive)
         ddmmyy = snap_datum.strftime("%d%m%y")
         gespeichert = []
@@ -443,14 +431,19 @@ with st.sidebar:
             master_csv = master_reduced.to_csv(index=False).encode("utf-8")
             upload_bytes_to_drive(drive, master_csv, f"master_{ddmmyy}.csv", folder_id, "text/csv")
             gespeichert.append("Masterdatei")
+        if orderlines_file is not None and ol_new is not None:
+            mode = "replace" if ol_modus == "Doppelte Tage ersetzen" else "append"
+            combined = pl.apply_orderlines(pl.load_orderlines(drive), ol_new, mode)
+            upload_bytes_to_drive(drive, combined.to_csv(index=False).encode("utf-8"),
+                                  pl.ORDERLINES_FILE, folder_id, "text/csv")
+            load_orderlines.clear()
+            gespeichert.append(f"Orderlines ({len(combined):,} ges.)".replace(",", "."))
         list_snapshots.clear()
         load_snapshot.clear()
-        st.success(f"Gespeichert ({snap_datum.strftime('%d.%m.%Y')}): {', '.join(gespeichert)}")
+        st.success(f"Gespeichert: {', '.join(gespeichert)}")
 
-    # ── Abverkauf: Orderlines-Upload + Kalender/Einstellungen hinter Icons ──
+    # ── Orderlines verwalten: Kalender / Einstellungen hinter Icons ──
     st.divider()
-    st.markdown("##### Orderlines (Abverkauf)")
-    render_orderlines_upload(drive)
     pop1, pop2 = st.columns(2)
     with pop1:
         with st.popover(":material/calendar_month:", use_container_width=True, help="Vorhandene Tage / löschen"):
