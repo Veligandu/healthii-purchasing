@@ -1463,17 +1463,19 @@ def render_produktansicht():
                         last["Mitgekaufte Artikel"] = last["order_id"].map(co).fillna("—")
                         last["datum"] = pd.to_datetime(last["datum"]).dt.strftime("%d.%m.%Y")
                         last["wert"] = last["wert"].round(2)
+                        last["cm2"] = last["cm2"].round(2)
                         last = last.rename(columns={
-                            "order_id": "Bestellnr.", "datum": "Datum",
-                            "pos": "Positionen", "wert": "Warenkorbwert netto €"})
+                            "order_id": "Bestellnr.", "datum": "Datum", "pos": "Positionen",
+                            "wert": "Warenkorbwert netto €", "cm2": "CM2 €"})
                         st.caption("Zeile anklicken, um alle Positionen des Warenkorbs zu sehen. "
                                    "Alle Warenkorbwerte sind Netto-Werte (TotalNet).")
                         ev = st.dataframe(
-                            last[["Datum", "Bestellnr.", "Positionen", "Warenkorbwert netto €", "Mitgekaufte Artikel"]],
+                            last[["Datum", "Bestellnr.", "Positionen", "Warenkorbwert netto €", "CM2 €", "Mitgekaufte Artikel"]],
                             use_container_width=True, hide_index=True,
                             on_select="rerun", selection_mode="single-row", key="pv_basket_sel",
                             column_config={
                                 "Positionen": st.column_config.NumberColumn(format="%d"),
+                                "CM2 €": st.column_config.NumberColumn(format="%.2f €"),
                                 "Warenkorbwert netto €": st.column_config.NumberColumn(format="%.2f €"),
                             },
                         )
