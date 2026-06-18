@@ -370,11 +370,13 @@ with st.sidebar:
                                    help="Quelle: Download aus Channelpilot")
     orderlines_file = st.file_uploader("Orderlines (CSV)", type=["csv"], key="up_orderlines",
                                        help="Quelle: Metabase › Produkte & Hersteller › Pricing")
-    ic1, ic2, _ic = st.columns([1, 1, 3])
-    if ic1.button(":material/calendar_month:", key="btn_cal", help="Vorhandene Tage anzeigen"):
+    ic1, ic2, _ic = st.columns([1, 1, 6])
+    if ic1.button(":material/calendar_month:", key="btn_cal", type="tertiary",
+                  help="Vorhandene Tage anzeigen"):
         st.session_state["pricing_panel"] = (
             None if st.session_state.get("pricing_panel") == "calendar" else "calendar")
-    if ic2.button(":material/settings:", key="btn_set", help="Einstellungen anzeigen"):
+    if ic2.button(":material/settings:", key="btn_set", type="tertiary",
+                  help="Einstellungen anzeigen"):
         st.session_state["pricing_panel"] = (
             None if st.session_state.get("pricing_panel") == "settings" else "settings")
     ol_modus = st.radio(
