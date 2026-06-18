@@ -221,6 +221,152 @@ def load_report(_drive, iso_datum):
     return pl.load_report(_drive, iso_datum)
 
 
+# ─── Orderlines-Verwaltung (Sidebar-Upload, Kalender-/Einstellungen-Popover) ─────
+
+def render_orderlines_upload(drive):
+    """Orderlines-Uploader + Modus + Übernehmen-Button (in der Sidebar)."""
+    up_file = st.file_uploader("Orderlines (CSV)", type=["csv"], key="sb_ol_up",
+                               help="Quelle: Metabase › Produkte & Hersteller › Pricing")
+    modus = st.radio(
+        "Modus", ["Nur neue Tage anhängen", "Doppelte Tage ersetzen"], key="sb_ol_mode",
+        help="Anhängen: vorhandene Tage bleiben unverändert. "
+             "Ersetzen: für Tage in der neuen Datei werden alte Zeilen überschrieben.",
+    )
+    ol_new = None
+    if up_file is not None:
+        try:
+            ol_new = parse_orderlines_bytes(up_file.getvalue())
+            st.success(f"{len(ol_new):,} Zeilen · "
+                       f"{ol_new['date'].min()} – {ol_new['date'].max()}".replace(",", "."))
+        except Exception as e:
+            st.error(f"Nicht lesbar: {e}")
+    if st.button("➕ Orderlines übernehmen", type="primary", use_container_width=True,
+                 disabled=ol_new is None, key="sb_ol_apply"):
+        mode = "replace" if modus == "Doppelte Tage ersetzen" else "append"
+        existing = pl.load_orderlines(drive)
+        combined = pl.apply_orderlines(existing, ol_new, mode)
+        folder_id = get_pricing_folder_id(drive)
+        upload_bytes_to_drive(drive, combined.to_csv(index=False).encode("utf-8"),
+                              pl.ORDERLINES_FILE, folder_id, "text/csv")
+        load_orderlines.clear()
+        st.success(f"Gespeichert: {len(combined):,} gesamt.".replace(",", "."))
+        st.rerun()
+
+
+def render_orderlines_calendar(drive):
+    """Kalender-Jahresansicht der vorhandenen Tage + Zeitraum löschen (im Popover)."""
+    ol = load_orderlines(drive)
+    if ol.empty:
+        st.info("Noch keine Orderlines gespeichert.")
+        return
+    tage = ol.groupby("date").size()
+    d_all = ol["d"]
+    st.caption(
+        f"Gespeichert: {len(ol):,} Zeilen · {d_all.min():%d.%m.%Y} – {d_all.max():%d.%m.%Y} "
+        f"· {ol['date'].nunique()} Tage".replace(",", ".")
+    )
+    jahre = sorted({d.year for d in d_all}, reverse=True)
+    jahr = st.selectbox("Jahr", jahre, index=0, key="ol_cal_y")
+    counts = {k: int(v) for k, v in tage.items()}
+
+    def _month_html(year, month):
+        head = "".join(f"<th style='padding:2px;color:#9CA3AF;font-size:9px;font-weight:600'>{d}</th>"
+                       for d in ["M", "D", "M", "D", "F", "S", "S"])
+        body = ""
+        for wk in calendar.Calendar(firstweekday=0).monthdayscalendar(year, month):
+            cells = ""
+            for day in wk:
+                if day == 0:
+                    cells += "<td></td>"
+                    continue
+                n = counts.get(f"{year:04d}-{month:02d}-{day:02d}", 0)
+                if n > 0:
+                    cells += (f"<td title='{n} Orderlines' style='padding:3px;text-align:center;"
+                              f"font-size:10px;font-weight:600;background:#CCFBF1;color:#0F766E;"
+                              f"border:1px solid #99F6E4;border-radius:4px'>{day}</td>")
+                else:
+                    cells += (f"<td style='padding:3px;text-align:center;font-size:10px;"
+                              f"color:#D1D5DB'>{day}</td>")
+            body += f"<tr>{cells}</tr>"
+        return (f"<div style='font-weight:600;font-size:12px;color:#374151;margin-bottom:4px'>"
+                f"{calendar.month_name[month]}</div>"
+                f"<table style='border-collapse:separate;border-spacing:2px'>"
+                f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
+
+    for row_start in range(1, 13, 2):
+        mcols = st.columns(2)
+        for i, month in enumerate(range(row_start, min(row_start + 2, 13))):
+            mcols[i].markdown(_month_html(jahr, month), unsafe_allow_html=True)
+    st.caption("Eingefärbte Tage enthalten Daten (Tooltip = Anzahl Orderlines).")
+
+    st.divider()
+    st.markdown("##### Zeitraum löschen")
+    dmin_d, dmax_d = d_all.min().date(), d_all.max().date()
+    dc1, dc2 = st.columns(2)
+    with dc1:
+        del_von = st.date_input("Von", value=dmin_d, min_value=dmin_d, max_value=dmax_d,
+                                format="DD.MM.YYYY", key="ol_del_von")
+    with dc2:
+        del_bis = st.date_input("Bis", value=dmax_d, min_value=dmin_d, max_value=dmax_d,
+                                format="DD.MM.YYYY", key="ol_del_bis")
+    betroffen = int(ol[(ol["date"] >= del_von.isoformat()) & (ol["date"] <= del_bis.isoformat())].shape[0])
+    st.caption(f"Betroffen: {betroffen:,} Zeilen".replace(",", "."))
+    if st.button("🗑️ Zeitraum löschen", disabled=betroffen == 0, key="ol_del_btn"):
+        rest = pl.delete_orderlines_range(pl.load_orderlines(drive),
+                                          del_von.isoformat(), del_bis.isoformat())
+        folder_id = get_pricing_folder_id(drive)
+        upload_bytes_to_drive(drive, rest.to_csv(index=False).encode("utf-8"),
+                              pl.ORDERLINES_FILE, folder_id, "text/csv")
+        load_orderlines.clear()
+        st.success(f"{betroffen:,} Zeilen gelöscht.".replace(",", "."))
+        st.rerun()
+
+
+def render_pricing_settings(drive, cfg):
+    """Channel-Bezeichnungen + Source-Zuordnung (im Popover, als Form)."""
+    ol = load_orderlines(drive)
+    opt_refs = [REF_QUOTE] + CHANNEL_COLS
+    sources = set(cfg["source_map"].keys())
+    if not ol.empty:
+        sources |= set(ol["source"].dropna().unique())
+    sources = sorted(s for s in sources if s)
+
+    with st.form("settings_form"):
+        st.markdown("##### Channel-Bezeichnungen")
+        st.caption("Sprechende Namen für die Channel-Preisreihen – werden überall verwendet.")
+        new_labels = {}
+        for i, c in enumerate(CHANNEL_COLS):
+            new_labels[c] = st.text_input(
+                f"channelPrice{i + 1}",
+                value=cfg["channel_labels"].get(c, f"Channel {i + 1}"), key=f"set_lbl_{c}")
+
+        st.markdown("##### Source-Zuordnung")
+        st.caption("Welche Preisreihe gilt je Marketing-Source? Nicht zugeordnete → Quote. "
+                   "Geänderte Channel-Namen erscheinen in den Dropdowns nach dem Speichern.")
+
+        def _opt_label(r):
+            return QUOTE_LABEL if r == REF_QUOTE else (cfg["channel_labels"].get(r) or r)
+
+        new_map = {}
+        for s in sources:
+            cur = cfg["source_map"].get(s, REF_QUOTE)
+            idx = opt_refs.index(cur) if cur in opt_refs else 0
+            sel = st.selectbox(s, opt_refs, index=idx, format_func=_opt_label, key=f"set_src_{s}")
+            if sel != REF_QUOTE:
+                new_map[s] = sel
+
+        submitted = st.form_submit_button("💾 Einstellungen speichern", type="primary")
+
+    if submitted:
+        new_cfg = {"channel_labels": new_labels, "source_map": new_map}
+        folder_id = get_pricing_folder_id(drive)
+        upload_bytes_to_drive(drive, pl.config_to_bytes(new_cfg),
+                              pl.CONFIG_FILE, folder_id, "application/json")
+        load_config.clear()
+        st.success("Einstellungen gespeichert.")
+        st.rerun()
+
+
 # ─── Seiteninhalt ──────────────────────────────────────────────────────────────
 
 st.title(":material/payments: Pricing")
@@ -300,7 +446,18 @@ with st.sidebar:
         list_snapshots.clear()
         load_snapshot.clear()
         st.success(f"Gespeichert ({snap_datum.strftime('%d.%m.%Y')}): {', '.join(gespeichert)}")
-        st.caption("Orderlines werden im Tab „Abverkauf“ verwaltet.")
+
+    # ── Abverkauf: Orderlines-Upload + Kalender/Einstellungen hinter Icons ──
+    st.divider()
+    st.markdown("##### Orderlines (Abverkauf)")
+    render_orderlines_upload(drive)
+    pop1, pop2 = st.columns(2)
+    with pop1:
+        with st.popover("🗓️", use_container_width=True, help="Vorhandene Tage / löschen"):
+            render_orderlines_calendar(drive)
+    with pop2:
+        with st.popover("⚙️", use_container_width=True, help="Einstellungen"):
+            render_pricing_settings(drive, cfg)
 
     # Vorhandene Snapshots anzeigen
     st.divider()
@@ -942,8 +1099,8 @@ with tab_sales:
         ol = ol[ol["d"].notna()]
         namen = ol.groupby("productId")["productname"].first()
 
-    sub_a, sub_b, sub_data, sub_set = st.tabs(
-        [":material/leaderboard: Rennerliste", ":material/insights: Preisänderungs-Wirkung", ":material/calendar_month: Orderlines", ":material/settings: Einstellungen"]
+    sub_a, sub_b = st.tabs(
+        [":material/leaderboard: Rennerliste", ":material/insights: Preisänderungs-Wirkung"]
     )
 
     # ── A) Rennerliste je Channel (nach Umsatz) ────────────────────────────────
@@ -1206,158 +1363,6 @@ with tab_sales:
                     render_wirkung(True)
                     st.divider()
                     render_wirkung(False)
-
-    # ── Orderlines verwalten: Upload (Modus), Löschen, Kalenderansicht ──────────
-    with sub_data:
-        # Upload mit Modus
-        st.markdown("##### Orderlines hochladen")
-        up_file = st.file_uploader("Orderlines (CSV)", type=["csv"], key="ol_up",
-                                   help="Quelle: Metabase › Produkte & Hersteller › Pricing")
-        modus = st.radio(
-            "Modus", ["Nur neue Tage anhängen", "Doppelte Tage ersetzen"],
-            horizontal=True, key="ol_mode",
-            help="Anhängen: vorhandene Tage bleiben unverändert. "
-                 "Ersetzen: für Tage in der neuen Datei werden alte Zeilen überschrieben.",
-        )
-        ol_new = None
-        if up_file is not None:
-            try:
-                ol_new = parse_orderlines_bytes(up_file.getvalue())
-                st.success(f"Datei gelesen: {len(ol_new):,} Zeilen · "
-                           f"{ol_new['date'].min()} – {ol_new['date'].max()}".replace(",", "."))
-            except Exception as e:
-                st.error(f"Orderlines nicht lesbar: {e}")
-        if st.button(":material/save: Übernehmen", type="primary", disabled=ol_new is None, key="ol_apply"):
-            mode = "replace" if modus == "Doppelte Tage ersetzen" else "append"
-            existing = load_orderlines(drive)
-            combined = pl.apply_orderlines(existing, ol_new, mode)
-            folder_id = get_pricing_folder_id(drive)
-            upload_bytes_to_drive(drive, combined.to_csv(index=False).encode("utf-8"),
-                                  pl.ORDERLINES_FILE, folder_id, "text/csv")
-            load_orderlines.clear()
-            st.success(f"Gespeichert: {len(combined):,} Orderlines gesamt.".replace(",", "."))
-            st.rerun()
-
-        st.divider()
-
-        if ol.empty:
-            st.info("Noch keine Orderlines gespeichert.")
-        else:
-            tage = ol.groupby("date").size()  # Zeilen je Tag (ISO-String)
-            d_all = pd.to_datetime(ol["date"])
-            st.caption(
-                f"Gespeichert: {len(ol):,} Zeilen · {d_all.min():%d.%m.%Y} – {d_all.max():%d.%m.%Y} "
-                f"· {ol['date'].nunique()} Tage".replace(",", ".")
-            )
-
-            # Kalender-Jahresansicht (alle 12 Monate)
-            st.markdown("##### Vorhandene Tage")
-            jahre = sorted({d.year for d in d_all}, reverse=True)
-            jahr = st.selectbox("Jahr", jahre, index=0, key="ol_cal_y")
-            counts = {k: int(v) for k, v in tage.items()}
-
-            def _month_html(year, month):
-                head = "".join(f"<th style='padding:2px;color:#9CA3AF;font-size:9px;font-weight:600'>{d}</th>"
-                               for d in ["M", "D", "M", "D", "F", "S", "S"])
-                body = ""
-                for wk in calendar.Calendar(firstweekday=0).monthdayscalendar(year, month):
-                    cells = ""
-                    for day in wk:
-                        if day == 0:
-                            cells += "<td></td>"
-                            continue
-                        n = counts.get(f"{year:04d}-{month:02d}-{day:02d}", 0)
-                        if n > 0:
-                            cells += (f"<td title='{n} Orderlines' style='padding:3px;text-align:center;"
-                                      f"font-size:10px;font-weight:600;background:#CCFBF1;color:#0F766E;"
-                                      f"border:1px solid #99F6E4;border-radius:4px'>{day}</td>")
-                        else:
-                            cells += (f"<td style='padding:3px;text-align:center;font-size:10px;"
-                                      f"color:#D1D5DB'>{day}</td>")
-                    body += f"<tr>{cells}</tr>"
-                return (f"<div style='font-weight:600;font-size:12px;color:#374151;margin-bottom:4px'>"
-                        f"{calendar.month_name[month]}</div>"
-                        f"<table style='border-collapse:separate;border-spacing:2px'>"
-                        f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
-
-            for row_start in range(1, 13, 4):  # 3 Zeilen à 4 Monate
-                mcols = st.columns(4)
-                for i, month in enumerate(range(row_start, min(row_start + 4, 13))):
-                    mcols[i].markdown(_month_html(jahr, month), unsafe_allow_html=True)
-            st.caption("Eingefärbte Tage enthalten Daten (Tooltip = Anzahl Orderlines).")
-
-            # Zeitraum löschen
-            st.divider()
-            st.markdown("##### Zeitraum löschen")
-            dmin_d, dmax_d = d_all.min().date(), d_all.max().date()
-            dc1, dc2 = st.columns(2)
-            with dc1:
-                del_von = st.date_input("Von", value=dmin_d, min_value=dmin_d, max_value=dmax_d,
-                                        format="DD.MM.YYYY", key="ol_del_von")
-            with dc2:
-                del_bis = st.date_input("Bis", value=dmax_d, min_value=dmin_d, max_value=dmax_d,
-                                        format="DD.MM.YYYY", key="ol_del_bis")
-            betroffen = int(ol[(ol["date"] >= del_von.isoformat()) & (ol["date"] <= del_bis.isoformat())].shape[0])
-            st.caption(f"Betroffen: {betroffen:,} Zeilen".replace(",", "."))
-            if st.button(":material/delete: Zeitraum löschen", disabled=betroffen == 0, key="ol_del_btn"):
-                rest = pl.delete_orderlines_range(load_orderlines(drive),
-                                                  del_von.isoformat(), del_bis.isoformat())
-                folder_id = get_pricing_folder_id(drive)
-                upload_bytes_to_drive(drive, rest.to_csv(index=False).encode("utf-8"),
-                                      pl.ORDERLINES_FILE, folder_id, "text/csv")
-                load_orderlines.clear()
-                st.success(f"{betroffen:,} Zeilen gelöscht.".replace(",", "."))
-                st.rerun()
-
-    # ── Einstellungen: Channel-Bezeichnungen + Source-Zuordnung ─────────────────
-    with sub_set:
-        opt_refs = [REF_QUOTE] + CHANNEL_COLS
-        sources = set(cfg["source_map"].keys())
-        if not ol.empty:
-            sources |= set(ol["source"].dropna().unique())
-        sources = sorted(s for s in sources if s)
-
-        # Form: Eingaben werden gesammelt, Rerun erst beim Speichern (nicht bei jeder Änderung)
-        with st.form("settings_form"):
-            st.markdown("##### Channel-Bezeichnungen")
-            st.caption("Sprechende Namen für die Channel-Preisreihen – werden überall verwendet "
-                       "(Momentaufnahme, Vergleich, Masterdatei-Analyse, Abverkauf).")
-            new_labels = {}
-            lcols = st.columns(len(CHANNEL_COLS))
-            for i, c in enumerate(CHANNEL_COLS):
-                new_labels[c] = lcols[i].text_input(
-                    f"channelPrice{i + 1}",
-                    value=cfg["channel_labels"].get(c, f"Channel {i + 1}"),
-                    key=f"set_lbl_{c}",
-                )
-
-            st.markdown("##### Source-Zuordnung")
-            st.caption("Welche Preisreihe gilt je Marketing-Source? Nicht zugeordnete Sources nutzen den Quote-Preis. "
-                       "Geänderte Channel-Namen erscheinen in den Dropdowns nach dem Speichern.")
-
-            def _opt_label(r):
-                return QUOTE_LABEL if r == REF_QUOTE else (cfg["channel_labels"].get(r) or r)
-
-            new_map = {}
-            scols = st.columns(3)
-            for i, s in enumerate(sources):
-                cur = cfg["source_map"].get(s, REF_QUOTE)
-                idx = opt_refs.index(cur) if cur in opt_refs else 0
-                sel = scols[i % 3].selectbox(s, opt_refs, index=idx,
-                                             format_func=_opt_label, key=f"set_src_{s}")
-                if sel != REF_QUOTE:
-                    new_map[s] = sel
-
-            submitted = st.form_submit_button(":material/save: Einstellungen speichern", type="primary")
-
-        if submitted:
-            new_cfg = {"channel_labels": new_labels, "source_map": new_map}
-            folder_id = get_pricing_folder_id(drive)
-            upload_bytes_to_drive(drive, pl.config_to_bytes(new_cfg),
-                                  pl.CONFIG_FILE, folder_id, "application/json")
-            load_config.clear()
-            st.success("Einstellungen gespeichert.")
-            st.rerun()
 
 
 # ════════════════════════════════════════════════════════════════════════════════
