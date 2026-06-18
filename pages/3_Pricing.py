@@ -368,17 +368,18 @@ with st.sidebar:
                                     help="Quelle: Google Drive › Pricing")
     master_file = st.file_uploader("Masterdatei (CSV)", type=["csv"], key="up_master",
                                    help="Quelle: Download aus Channelpilot")
-    orderlines_file = st.file_uploader("Orderlines (CSV)", type=["csv"], key="up_orderlines",
-                                       help="Quelle: Metabase › Produkte & Hersteller › Pricing")
-    ic1, ic2, _ic = st.columns([1, 1, 6])
-    if ic1.button(":material/calendar_month:", key="btn_cal", type="tertiary",
+    oh1, oh2, oh3 = st.columns([5, 1, 1], vertical_alignment="center")
+    oh1.markdown("Orderlines (CSV)", help="Quelle: Metabase › Produkte & Hersteller › Pricing")
+    if oh2.button(":material/calendar_month:", key="btn_cal", type="tertiary",
                   help="Vorhandene Tage anzeigen"):
         st.session_state["pricing_panel"] = (
             None if st.session_state.get("pricing_panel") == "calendar" else "calendar")
-    if ic2.button(":material/settings:", key="btn_set", type="tertiary",
+    if oh3.button(":material/settings:", key="btn_set", type="tertiary",
                   help="Einstellungen anzeigen"):
         st.session_state["pricing_panel"] = (
             None if st.session_state.get("pricing_panel") == "settings" else "settings")
+    orderlines_file = st.file_uploader("Orderlines (CSV)", type=["csv"], key="up_orderlines",
+                                       label_visibility="collapsed")
     ol_modus = st.radio(
         "Orderlines-Modus", ["Nur neue Tage anhängen", "Doppelte Tage ersetzen"], key="up_ol_mode",
         help="Anhängen: vorhandene Tage bleiben unverändert. "
