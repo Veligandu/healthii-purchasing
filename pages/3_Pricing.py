@@ -21,7 +21,7 @@ from purchasing_agent import upload_bytes_to_drive
 
 st.set_page_config(
     page_title="Pricing | Healthii",
-    page_icon="💰",
+    page_icon=":material/payments:",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -120,6 +120,7 @@ div[data-testid="metric-container"] { background: #FFFFFF; border: 1px solid #E5
 [data-baseweb="tab-highlight"] { background-color: #0D9488 !important; }
 button[data-baseweb="tab"][aria-selected="true"] { color: #0D9488 !important; }
 button[data-baseweb="tab"]:hover { color: #0D9488 !important; }
+span[data-testid="stIconMaterial"] { color: #2C2C2A; vertical-align: middle; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -222,7 +223,7 @@ def load_report(_drive, iso_datum):
 
 # ─── Seiteninhalt ──────────────────────────────────────────────────────────────
 
-st.title("💰 Pricing")
+st.title(":material/payments: Pricing")
 st.caption("Preisanalyse – Quote-Preise vs. Channel-Preise, geclustert nach Preishöhe")
 
 if drive is None:
@@ -238,7 +239,7 @@ source_map = cfg["source_map"]
 # SIDEBAR – Preisdateien hochladen
 # ════════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
-    st.header("📥 Preise hochladen")
+    st.header(":material/upload: Preise hochladen")
     st.caption("Quote-, Channel- und Masterdatei eines Zeitpunkts. Datum wird aus dem Dateinamen erkannt.")
 
     quote_file = st.file_uploader("Quote-Preise (CSV)", type=["csv"], key="up_quote",
@@ -281,7 +282,7 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Masterdatei nicht lesbar: {e}")
 
-    if st.button("💾 In Drive speichern", type="primary", use_container_width=True,
+    if st.button(":material/save: In Drive speichern", type="primary", use_container_width=True,
                  disabled=(quote_file is None and channel_file is None and master_file is None)):
         folder_id = get_pricing_folder_id(drive)
         ddmmyy = snap_datum.strftime("%d%m%y")
@@ -310,14 +311,14 @@ with st.sidebar:
     else:
         rows = [{
             "Datum": fmt_date(k),
-            "Quote": "✅" if v["quote_id"] else "—",
-            "Channel": "✅" if v["channel_id"] else "—",
-            "Master": "✅" if v.get("master_id") else "—",
+            "Quote": "Ja" if v["quote_id"] else "—",
+            "Channel": "Ja" if v["channel_id"] else "—",
+            "Master": "Ja" if v.get("master_id") else "—",
         } for k, v in _snaps.items()]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 tab_snap, tab_cmp, tab_master, tab_sales, tab_produkt = st.tabs(
-    ["📊 Momentaufnahme", "🔀 Vergleich", "🗂️ Masterdatei-Analyse", "🛒 Abverkauf", "🔍 Produktansicht"]
+    [":material/bar_chart: Momentaufnahme", ":material/compare_arrows: Vergleich", ":material/folder_open: Masterdatei-Analyse", ":material/shopping_cart: Abverkauf", ":material/search: Produktansicht"]
 )
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -521,7 +522,7 @@ with tab_snap:
                 with pd.ExcelWriter(buf, engine="openpyxl") as w:
                     out.to_excel(w, index=False, sheet_name="Kritische Preise")
                 st.download_button(
-                    "📥 Kritische Preise als Excel",
+                    ":material/download: Kritische Preise als Excel",
                     data=buf.getvalue(),
                     file_name=f"kritische_preise_{sel}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -537,7 +538,7 @@ with tab_snap:
                     key=f"report_txt_{sel}",
                     placeholder="Notizen / Einschätzung zu dieser Momentaufnahme …",
                 )
-                report_submit = st.form_submit_button("💾 Report speichern", type="primary")
+                report_submit = st.form_submit_button(":material/save: Report speichern", type="primary")
             if report_submit:
                 folder_id = get_pricing_folder_id(drive)
                 upload_bytes_to_drive(drive, report_txt.encode("utf-8"),
@@ -739,7 +740,7 @@ with tab_cmp:
                     cl.to_excel(w, index=False, sheet_name="Cluster")
                     bed_table(bed).to_excel(w, index=False, sheet_name="Bedeutendste Änderungen")
                 st.download_button(
-                    "📥 Vergleich als Excel",
+                    ":material/download: Vergleich als Excel",
                     data=buf.getvalue(),
                     file_name=f"pricing_vergleich_{metrik}_{von}_{bis}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -924,7 +925,7 @@ with tab_master:
                     summary.to_excel(w, index=False, sheet_name="Zusammenfassung")
                     out.to_excel(w, index=False, sheet_name="Abweichungen")
                 st.download_button(
-                    "📥 Abgleich als Excel",
+                    ":material/download: Abgleich als Excel",
                     data=buf.getvalue(),
                     file_name=f"masterabgleich_{sel_m}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -942,7 +943,7 @@ with tab_sales:
         namen = ol.groupby("productId")["productname"].first()
 
     sub_a, sub_b, sub_data, sub_set = st.tabs(
-        ["🏆 Rennerliste", "📉 Preisänderungs-Wirkung", "🗓️ Orderlines", "⚙️ Einstellungen"]
+        [":material/leaderboard: Rennerliste", ":material/insights: Preisänderungs-Wirkung", ":material/calendar_month: Orderlines", ":material/settings: Einstellungen"]
     )
 
     # ── A) Rennerliste je Channel (nach Umsatz) ────────────────────────────────
@@ -1015,7 +1016,7 @@ with tab_sales:
                 renner.rename(columns={"productId": "PZN"}).to_excel(
                     w, index=False, sheet_name="Rennerliste")
             st.download_button(
-                "📥 Als Excel (vollständig)", data=buf.getvalue(),
+                ":material/download: Als Excel (vollständig)", data=buf.getvalue(),
                 file_name=f"rennerliste_{ch.replace(' ', '_').lower()}.xlsx", key="ab_dl_a",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
@@ -1144,7 +1145,7 @@ with tab_sales:
                             eff_units, eff_net = "lost_units", "lost_net"
                             lbl_units, lbl_net = "Verlust Stk.", "Verlust € (netto)"
                             kpi_units, kpi_net = "Verlorene Einheiten (gesch.)", "Verlorener Umsatz (gesch.)"
-                            titel = "📉 Verluste – Preiserhöhung → Mengenrückgang"
+                            titel = ":red[:material/trending_down:] Verluste – Preiserhöhung → Mengenrückgang"
                             leer = "Keine signifikanten Abverkaufsverluste durch Preiserhöhungen für diese Auswahl."
                             tag = "verluste"
                         else:
@@ -1152,7 +1153,7 @@ with tab_sales:
                             eff_units, eff_net = "gained_units", "gained_net"
                             lbl_units, lbl_net = "Mehrabsatz Stk.", "Mehrumsatz € (netto)"
                             kpi_units, kpi_net = "Gewonnene Einheiten (gesch.)", "Mehrumsatz (gesch.)"
-                            titel = "📈 Gewinne – Preissenkung → Mengenzuwachs"
+                            titel = ":green[:material/trending_up:] Gewinne – Preissenkung → Mengenzuwachs"
                             leer = "Keine signifikanten Mengenzuwächse durch Preissenkungen für diese Auswahl."
                             tag = "gewinne"
 
@@ -1198,7 +1199,7 @@ with tab_sales:
                         with pd.ExcelWriter(buf, engine="openpyxl") as w:
                             out.to_excel(w, index=False, sheet_name="Preiswirkung")
                         st.download_button(
-                            "📥 Als Excel", data=buf.getvalue(),
+                            ":material/download: Als Excel", data=buf.getvalue(),
                             file_name=f"abverkauf_preiswirkung_{tag}_{von}_{bis}.xlsx", key=f"ab_dl_{tag}",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
@@ -1226,7 +1227,7 @@ with tab_sales:
                            f"{ol_new['date'].min()} – {ol_new['date'].max()}".replace(",", "."))
             except Exception as e:
                 st.error(f"Orderlines nicht lesbar: {e}")
-        if st.button("💾 Übernehmen", type="primary", disabled=ol_new is None, key="ol_apply"):
+        if st.button(":material/save: Übernehmen", type="primary", disabled=ol_new is None, key="ol_apply"):
             mode = "replace" if modus == "Doppelte Tage ersetzen" else "append"
             existing = load_orderlines(drive)
             combined = pl.apply_orderlines(existing, ol_new, mode)
@@ -1298,7 +1299,7 @@ with tab_sales:
                                         format="DD.MM.YYYY", key="ol_del_bis")
             betroffen = int(ol[(ol["date"] >= del_von.isoformat()) & (ol["date"] <= del_bis.isoformat())].shape[0])
             st.caption(f"Betroffen: {betroffen:,} Zeilen".replace(",", "."))
-            if st.button("🗑️ Zeitraum löschen", disabled=betroffen == 0, key="ol_del_btn"):
+            if st.button(":material/delete: Zeitraum löschen", disabled=betroffen == 0, key="ol_del_btn"):
                 rest = pl.delete_orderlines_range(load_orderlines(drive),
                                                   del_von.isoformat(), del_bis.isoformat())
                 folder_id = get_pricing_folder_id(drive)
@@ -1347,7 +1348,7 @@ with tab_sales:
                 if sel != REF_QUOTE:
                     new_map[s] = sel
 
-            submitted = st.form_submit_button("💾 Einstellungen speichern", type="primary")
+            submitted = st.form_submit_button(":material/save: Einstellungen speichern", type="primary")
 
         if submitted:
             new_cfg = {"channel_labels": new_labels, "source_map": new_map}

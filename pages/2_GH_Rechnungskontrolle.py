@@ -23,7 +23,7 @@ except Exception:
 
 st.set_page_config(
     page_title="GH-Rechnungskontrolle | Healthii",
-    page_icon="📄",
+    page_icon=":material/description:",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -122,6 +122,8 @@ div[data-testid="metric-container"] { background: #FFFFFF; border: 1px solid #E5
 [data-baseweb="tab-highlight"] { background-color: #0D9488 !important; }
 button[data-baseweb="tab"][aria-selected="true"] { color: #0D9488 !important; }
 button[data-baseweb="tab"]:hover { color: #0D9488 !important; }
+span[data-testid="stIconMaterial"] { color: #2C2C2A; vertical-align: middle; }
+.material-symbols-rounded { font-family: 'Material Symbols Rounded'; font-weight: normal; font-style: normal; line-height: 1; letter-spacing: normal; text-transform: none; display: inline-block; white-space: nowrap; word-wrap: normal; direction: ltr; -webkit-font-smoothing: antialiased; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1007,7 +1009,7 @@ with st.sidebar:
     if "gh_jahr" not in st.session_state:
         st.session_state["gh_jahr"] = heute.year
 
-    gh_auswahl = st.selectbox("🏢 Großhändler", GROSSHAENDLER, key="gh_haendler")
+    gh_auswahl = st.selectbox(":material/business: Großhändler", GROSSHAENDLER, key="gh_haendler")
 
     col_m, col_j = st.columns(2)
     monat_auswahl = col_m.selectbox("Monat", list(range(1, 13)),
@@ -1020,10 +1022,10 @@ with st.sidebar:
     _gesperrt_sb = bool(st.session_state.get(
         f"gh_locked_{gh_auswahl}_{jahr_auswahl}_{monat_auswahl:02d}"))
     if _gesperrt_sb:
-        st.info("🔒 Dieser Monat ist gesperrt — Uploads deaktiviert.")
+        st.info("Dieser Monat ist gesperrt — Uploads deaktiviert.", icon=":material/lock:")
 
     st.divider()
-    st.header("📄 Rechnungen hochladen")
+    st.header(":material/description: Rechnungen hochladen")
 
     if "gh_upl_nonce" not in st.session_state:
         st.session_state.gh_upl_nonce = 0
@@ -1041,7 +1043,7 @@ with st.sidebar:
     st.divider()
 
     # Monatsabrechnungen (GH): listen die abgerechneten Rechnungsnummern
-    st.header("📑 Monatsabrechnungen")
+    st.header(":material/article: Monatsabrechnungen")
     _abr_key    = f"gh_abr_{gh_auswahl}_{jahr_auswahl}_{monat_auswahl:02d}"
     _abrpdf_key = f"gh_abrpdfs_{gh_auswahl}_{jahr_auswahl}_{monat_auswahl:02d}"
     abr_uploads = st.file_uploader(
@@ -1065,11 +1067,11 @@ with st.sidebar:
                 abrpdf_neu[f.name] = raw
                 n_dok += 1
             except Exception as e:
-                st.warning(f"❌ {f.name}: {e}")
+                st.warning(f"{f.name}: {e}", icon=":material/error:")
         if abr_neu:
             st.session_state[_abr_key]    = abr_neu
             st.session_state[_abrpdf_key] = abrpdf_neu
-            st.success(f"✓ {n_dok} Abrechnung(en) gelesen — {len(abr_neu)} Rechnungsnummern")
+            st.success(f"{n_dok} Abrechnung(en) gelesen — {len(abr_neu)} Rechnungsnummern", icon=":material/check_circle:")
         else:
             st.error("Keine Rechnungsnummern erkannt.")
     if _abr_parser is None:
@@ -1077,7 +1079,7 @@ with st.sidebar:
     _akt_abr = st.session_state.get(_abr_key) or {}
     if _akt_abr:
         st.caption(f"Aktuell {len(_akt_abr)} abgerechnete Rechnungsnummern.")
-        if st.button("🗑 Abrechnungen zurücksetzen", use_container_width=True):
+        if st.button(":material/delete: Abrechnungen zurücksetzen", use_container_width=True):
             st.session_state[_abr_key]    = {}
             st.session_state[_abrpdf_key] = {}
             st.rerun()
@@ -1085,7 +1087,7 @@ with st.sidebar:
     st.divider()
 
     # Healthii-EK-Preise: zentrale Master-Liste (gilt für alle GHs/Monate)
-    st.header("💶 Healthii-EK-Preise")
+    st.header(":material/euro: Healthii-EK-Preise")
     st.caption("Zentrale Preisliste — gilt für alle Großhändler. Upload ersetzt die bisherige.")
     preis_csv = st.file_uploader(
         "Preisliste (CSV)",
@@ -1115,7 +1117,7 @@ with st.sidebar:
                     st.error(f"Drive-Fehler beim Speichern der Preise: {e}")
             if ok:
                 _vc = df_neu["source"].astype(str).str.upper().value_counts().to_dict()
-                st.success(f"✓ Aktualisiert: { {k:int(v) for k,v in _vc.items()} }"
+                st.success(f"Aktualisiert: { {k:int(v) for k,v in _vc.items()} }"
                            + (" · in Drive gespeichert" if drive else ""))
         else:
             st.error("Keine PZN/Preis-Paare erkannt. Spalten prüfen.")
@@ -1131,8 +1133,8 @@ with st.sidebar:
 
     # Gespeicherte Monate aus Drive laden (pro GH)
     if drive:
-        st.header(f"📁 Gespeicherte Monate ({gh_auswahl})")
-        if st.button("🔄 Liste aktualisieren", use_container_width=True):
+        st.header(f":material/folder: Gespeicherte Monate ({gh_auswahl})")
+        if st.button(":material/refresh: Liste aktualisieren", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
         try:
@@ -1151,7 +1153,7 @@ with st.sidebar:
                     if _m:
                         _yy, _mm = int(_m.group(1)), int(_m.group(2))
                         _aktiv = (_yy == int(jahr_auswahl) and _mm == monat_auswahl)
-                        if st.button(f"{'📂' if _aktiv else '✓'} {_mm:02d}/{_yy}",
+                        if st.button(f"{':material/folder_open:' if _aktiv else ':material/check:'} {_mm:02d}/{_yy}",
                                      key=f"open_{gh_auswahl}_{_yy}_{_mm}",
                                      use_container_width=True,
                                      type="primary" if _aktiv else "secondary"):
@@ -1259,7 +1261,7 @@ elif verarbeiten and uploads:
             totals_neu[beleg] = total_pdf
             pdfs_neu[beleg]   = raw
         except Exception as e:
-            fehler.append(f"❌ {pdf_file.name}: {e}")
+            fehler.append(f"Fehler bei {pdf_file.name}: {e}")
 
     fortschritt.empty()
 
@@ -1286,7 +1288,7 @@ elif verarbeiten and uploads:
         st.session_state[totals_key] = totals_alt
         st.session_state[pdf_key]    = pdfs_alt
 
-        msgs.append(("success", f"✓ {len(totals_neu)} Beleg(e) eingelesen."))
+        msgs.append(("success", f"{len(totals_neu)} Beleg(e) eingelesen."))
         for f in fehler:
             msgs.append(("warning", f))
     else:
@@ -1319,7 +1321,7 @@ belege_alle = sorted(set(df_roh["Beleg"].unique()) | set(totals.keys()) | set(pd
 if not belege_alle and not abr:
     st.markdown("""
     <div style='text-align:center;padding:80px 0;color:#9CA3AF;'>
-        <div style='font-size:48px;'>📄</div>
+        <div><span class='material-symbols-rounded' style='font-size:48px;color:#CBD5E1;'>description</span></div>
         <div style='font-size:16px;margin-top:12px;'>
             Monat auswählen und PDFs hochladen — oder gespeicherten Monat links anklicken
         </div>
@@ -1355,11 +1357,11 @@ else:
         n_neu += speichere_abr_pdfs_in_drive(drive, gh_auswahl, abrpdf_session, int(jahr_auswahl), monat_auswahl)
         return n_neu
 
-    def _speichern_mit_feedback(prefix="✓"):
+    def _speichern_mit_feedback(prefix=""):
         try:
             with st.spinner("Speichere in Drive …"):
                 n_neu = _speichern_ausfuehren()
-            st.success(f"{prefix} Stand gespeichert ({n_neu} neue PDF(s) hochgeladen)")
+            st.success(f"{prefix}Stand gespeichert ({n_neu} neue PDF(s) hochgeladen)", icon=":material/check_circle:")
         except Exception as e:
             st.error(f"Drive-Fehler: {e}")
 
@@ -1369,10 +1371,10 @@ else:
         # Gesperrt: Statusbanner + Entsperren
         _lk_l, _lk_r = st.columns([3, 1])
         with _lk_l:
-            st.warning(f"🔒 **Gesperrt** ({st.session_state.get(lockam_key,'')}) — "
-                       f"read-only. Preise eingefroren.")
+            st.warning(f"**Gesperrt** ({st.session_state.get(lockam_key,'')}) — "
+                       f"read-only. Preise eingefroren.", icon=":material/lock:")
         with _lk_r:
-            if st.button("🔓 Entsperren", use_container_width=True):
+            if st.button(":material/lock_open: Entsperren", use_container_width=True):
                 st.session_state[lock_key]   = False
                 st.session_state[lockam_key] = ""
                 with st.spinner("Entsperre & speichere …"):
@@ -1384,7 +1386,7 @@ else:
     elif drive:
         _sp_l, _sp_m, _sp_r = st.columns([2, 1, 1])
         with _sp_m:
-            if st.button("🔒 Abschließen & sperren", use_container_width=True):
+            if st.button(":material/lock: Abschließen & sperren", use_container_width=True):
                 _report_sichern()
                 from datetime import datetime as _dt
                 st.session_state[lock_key]   = True
@@ -1399,7 +1401,7 @@ else:
                         st.error(f"Drive-Fehler: {e}")
                 st.rerun()
         with _sp_r:
-            if st.button("💾 Aktuellen Stand speichern", use_container_width=True, type="primary"):
+            if st.button(":material/save: Aktuellen Stand speichern", use_container_width=True, type="primary"):
                 _report_sichern()   # Textfeld-Wert sichern, bevor evtl. rerun das Widget verwirft
                 if monat_existiert_in_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl):
                     st.session_state[confirm_key] = True
@@ -1413,13 +1415,13 @@ else:
                 if st.button("Ja, überschreiben", type="primary",
                              use_container_width=True, key=f"ow_yes_{confirm_key}"):
                     st.session_state[confirm_key] = False
-                    _speichern_mit_feedback(prefix="✓ Überschrieben —")
+                    _speichern_mit_feedback(prefix="Überschrieben — ")
                 if st.button("Abbrechen", use_container_width=True, key=f"ow_no_{confirm_key}"):
                     st.session_state[confirm_key] = False
                     st.rerun()
 
     tab_abgleich, tab_beleg, tab_monat = st.tabs(
-        ["📑 Abgleich Monatsabrechnung", "🧾 Belegkontrolle", "📊 Monatstabelle"]
+        [":material/article: Abgleich Monatsabrechnung", ":material/receipt: Belegkontrolle", ":material/table_chart: Monatstabelle"]
     )
 
     # ════ Tab 1: Abgleich Monatsabrechnung ════
@@ -1444,7 +1446,7 @@ else:
             )
             df_abr["_dt"] = pd.to_datetime(df_abr["Lieferdatum"], errors="coerce")
             df_abr["Vorhanden"] = df_abr["Rechnungsnr"].apply(
-                lambda n: "✅ vorhanden" if n in belege_vorhanden else "❌ fehlt"
+                lambda n: "vorhanden" if n in belege_vorhanden else "fehlt"
             )
             df_abr = (
                 df_abr.sort_values(["_dt", "Rechnungsnr"], na_position="last")
@@ -1454,7 +1456,7 @@ else:
             # Spaltenreihenfolge: Lieferdatum zuerst
             df_abr = df_abr[["Lieferdatum", "Rechnungsnr", "Betrag laut Abrechnung", "Vorhanden"]]
 
-            fehlend  = df_abr[df_abr["Vorhanden"] == "❌ fehlt"]
+            fehlend  = df_abr[df_abr["Vorhanden"] == "fehlt"]
             n_fehlend = len(fehlend)
             summe_fehlend = fehlend["Betrag laut Abrechnung"].sum()
 
@@ -1463,19 +1465,19 @@ else:
 
             a1, a2, a3, a4 = st.columns(4)
             a1.metric("Abgerechnet", len(df_abr))
-            a2.metric("✅ Vorhanden", int((df_abr["Vorhanden"] == "✅ vorhanden").sum()))
-            a3.metric("❌ Fehlend", n_fehlend)
+            a2.metric("Vorhanden", int((df_abr["Vorhanden"] == "vorhanden").sum()))
+            a3.metric("Fehlend", n_fehlend)
             a4.metric("Summe fehlend", f"{summe_fehlend:,.2f} €")
 
             if n_fehlend:
                 st.warning(f"{n_fehlend} laut Abrechnung berechnete Belege fehlen "
-                           f"(Summe {summe_fehlend:,.2f} €) — siehe ❌ in der Tabelle.")
+                           f"(Summe {summe_fehlend:,.2f} €) — siehe „fehlt“ in der Tabelle.")
             else:
                 st.success("Alle laut Abrechnung berechneten Belege sind vorhanden.")
 
             def _abr_stil(row):
                 rot = "background-color: #FEE2E2"
-                return [rot if row["Vorhanden"] == "❌ fehlt" else "" for _ in row]
+                return [rot if row["Vorhanden"] == "fehlt" else "" for _ in row]
 
             styler_abr = (
                 df_abr.style.apply(_abr_stil, axis=1)
@@ -1490,7 +1492,7 @@ else:
             _abr_buf = io.BytesIO()
             df_abr.to_excel(_abr_buf, index=False, sheet_name="Abrechnungsabgleich")
             st.download_button(
-                "📥 Abgleich als Excel",
+                ":material/download: Abgleich als Excel",
                 data=_abr_buf.getvalue(),
                 file_name=f"abrechnungsabgleich_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1498,16 +1500,16 @@ else:
             )
 
             if extra:
-                st.caption(f"ℹ️ {len(extra)} vorhandene Belege stehen in keiner Abrechnung: "
+                st.caption(f":material/info: {len(extra)} vorhandene Belege stehen in keiner Abrechnung: "
                            f"{', '.join(extra[:30])}{' …' if len(extra) > 30 else ''}")
 
             # Hinterlegte Abrechnungs-PDFs anzeigen/herunterladen
             abr_pdfs = st.session_state.get(abrpdf_key) or {}
             if abr_pdfs:
-                with st.expander(f"📑 {len(abr_pdfs)} Abrechnungs-PDF(s)"):
+                with st.expander(f":material/article: {len(abr_pdfs)} Abrechnungs-PDF(s)"):
                     for _name, _raw in abr_pdfs.items():
                         st.download_button(
-                            f"📥 {_name}",
+                            f":material/download: {_name}",
                             data=_raw,
                             file_name=_name,
                             mime="application/pdf",
@@ -1542,28 +1544,28 @@ else:
 
             def _status(r):
                 if str(r["Beleg"]) in ausgeschlossen:
-                    return "🔒 Gesperrt"
+                    return "Gesperrt"
                 if r["Positionen"] == 0:
-                    return "❌ Keine Positionen"
+                    return "Keine Pos."
                 d = r["Differenz"]
                 if pd.notna(d) and abs(d) < 0.01:
-                    return "✅"
+                    return "OK"
                 if pd.notna(d):
-                    return "⚠️ Abweichung"
-                return "❓"
+                    return "Abweichung"
+                return "?"
             df_belege["Status"] = df_belege.apply(_status, axis=1)
             df_belege = df_belege.sort_values("Beleg").reset_index(drop=True)
 
-            n_ok   = int((df_belege["Status"] == "✅").sum())
-            n_abw  = int((df_belege["Status"] == "⚠️ Abweichung").sum())
+            n_ok   = int((df_belege["Status"] == "OK").sum())
+            n_abw  = int((df_belege["Status"] == "Abweichung").sum())
             n_leer = int((df_belege["Positionen"] == 0).sum())
             n_excl = len(ausgeschlossen)
             c1, c2, c3, c4, c5, c6 = st.columns(6)
             c1.metric("Belege", len(df_belege))
-            c2.metric("✅ OK", n_ok)
-            c3.metric("⚠️ Abweichungen", n_abw)
-            c4.metric("❌ Keine Pos.", n_leer)
-            c5.metric("🔒 Gesperrt", n_excl)
+            c2.metric("OK", n_ok)
+            c3.metric("Abweichungen", n_abw)
+            c4.metric("Keine Pos.", n_leer)
+            c5.metric("Gesperrt", n_excl)
             c6.metric("Gesamtwert (kalk.)", f"{df_agg['Warenwert'].sum():,.2f} €")
 
             st.divider()
@@ -1600,7 +1602,7 @@ else:
                 "Beleg":               "Belegnr.",
             }).to_excel(_bk_buf, index=False, sheet_name="Belegkontrolle")
             st.download_button(
-                "📥 Belegkontrolle als Excel",
+                ":material/download: Belegkontrolle als Excel",
                 data=_bk_buf.getvalue(),
                 file_name=f"belegkontrolle_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1616,22 +1618,25 @@ else:
                 zeile = df_belege[df_belege["Beleg"] == beleg].iloc[0]
                 diff      = zeile["Differenz"]
                 beleg_wert = zeile["Warenwert_Beleg"]
-                ist_ok    = zeile["Status"] == "✅"
+                ist_ok    = zeile["Status"] == "OK"
                 ist_excl  = str(beleg) in ausgeschlossen
 
                 st.divider()
-                st.subheader(f"{'🔒' if ist_excl else ('✅' if ist_ok else '⚠️')} Beleg {beleg} korrigieren")
+                _beleg_icon = (":material/lock:" if ist_excl
+                               else (":green[:material/check_circle:]" if ist_ok
+                                     else ":orange[:material/warning:]"))
+                st.subheader(f"{_beleg_icon} Beleg {beleg} korrigieren")
 
                 # Beleg von der Monatstabellen-Kalkulation aus-/einschließen
                 _excl_l, _excl_r = st.columns([3, 1])
                 with _excl_r:
                     if ist_excl:
-                        if st.button("🔓 In Kalkulation aufnehmen", use_container_width=True,
+                        if st.button(":material/lock_open: In Kalkulation aufnehmen", use_container_width=True,
                                      key=f"incl_{beleg}", disabled=gesperrt):
                             st.session_state[excl_key].discard(str(beleg))
                             st.rerun()
                     else:
-                        if st.button("🔒 Aus Kalkulation ausschließen", use_container_width=True,
+                        if st.button(":material/lock: Aus Kalkulation ausschließen", use_container_width=True,
                                      key=f"excl_{beleg}", disabled=gesperrt):
                             st.session_state[excl_key].add(str(beleg))
                             st.rerun()
@@ -1670,7 +1675,7 @@ else:
                         st.warning(f"Nach Korrektur weiterhin {neue_diff:+.2f} € Differenz "
                                    f"({neuer_wert:,.2f} € berechnet vs. {beleg_wert:,.2f} € laut Beleg).")
 
-                if st.button("💾 Korrekturen übernehmen", key=f"save_{beleg}",
+                if st.button(":material/save: Korrekturen übernehmen", key=f"save_{beleg}",
                              type="primary", disabled=gesperrt):
                     edited = edited[edited["PZN"].notna() & (edited["PZN"].astype(str) != "")]
                     edited["Beleg"] = beleg
@@ -1678,7 +1683,7 @@ else:
                     edited["Monat"] = df_b["Monat"].iloc[0] if not df_b.empty else monat_auswahl
                     df_rest = df_roh[df_roh["Beleg"] != beleg]
                     st.session_state[roh_key] = pd.concat([df_rest, edited], ignore_index=True)
-                    st.success(f"✓ Beleg {beleg} aktualisiert")
+                    st.success(f"Beleg {beleg} aktualisiert", icon=":material/check_circle:")
                     st.rerun()
 
                 # Zugehöriges Original-PDF anzeigen
@@ -1710,7 +1715,7 @@ else:
                             unsafe_allow_html=True,
                         )
                     st.download_button(
-                        "📥 PDF herunterladen",
+                        ":material/download: PDF herunterladen",
                         data=pdf_bytes,
                         file_name=f"INVOICE-{beleg}.pdf",
                         mime="application/pdf",
@@ -1832,7 +1837,7 @@ else:
                 df_vis.to_excel(_w, index=False, sheet_name=_sheet)
                 df_belege.to_excel(_w, index=False, sheet_name="Belegkontrolle")
             st.download_button(
-                label="📥 Excel herunterladen",
+                label=":material/download: Excel herunterladen",
                 data=_buf.getvalue(),
                 file_name=f"gh_rechnung_{jahr_auswahl}_{monat_auswahl:02d}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1854,7 +1859,7 @@ else:
             )
             # Bei jedem Render den aktuellen Wert in den persistenten Key übernehmen
             _report_sichern()
-            st.caption("Wird mit „💾 Aktuellen Stand speichern“ oben in Drive gesichert.")
+            st.caption("Wird mit „Aktuellen Stand speichern“ oben in Drive gesichert.")
 
         else:
             st.info("Noch keine Belege für diesen Monat — links Sammelrechnungen hochladen.")
