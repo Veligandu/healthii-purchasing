@@ -1378,11 +1378,25 @@ with tab_produkt:
                         basket["andere"] = basket["wert"] - basket.index.map(thisv).fillna(0.0)
                         basket["rel_marge"] = basket["marge_eur"] / basket["wert"]
 
-                        b1, b2, b3, b4 = st.columns(4)
+                        # CM2 je Warenkorb (marge_eur = Warenkorbmarge × Netto-Warenkorbwert)
+                        CM2_OPEX, CM2_PAYMENT, CM2_FRACHT = 0.04, 0.02, 4.0
+                        basket["cm2"] = basket["marge_eur"] * (1 - CM2_OPEX - CM2_PAYMENT) - CM2_FRACHT
+
+                        b1, b2, b3, b4, b5 = st.columns(5)
                         b1.metric("Warenkörbe mit Produkt", f"{len(basket):,}".replace(",", "."))
                         b2.metric("Ø Warenkorbwert (netto)", f"{basket['wert'].mean():.2f} €")
                         b3.metric("Ø mitgekaufter Wert (netto)", f"{basket['andere'].mean():.2f} €")
                         b4.metric("Ø relative Marge", f"{basket['rel_marge'].mean() * 100:.1f} %")
+                        b5.metric("Ø CM2 / Warenkorb", f"{basket['cm2'].mean():.2f} €")
+
+                        st.info(
+                            "**CM2-Berechnung je Warenkorb:** "
+                            "Warenkorbmarge × Netto-Warenkorbwert × (100 % − 4 % variable Operationskosten "
+                            "− 2 % Payment) − 4 € (Verpackung & Versand).\n\n"
+                            "Dabei ist *Warenkorbmarge × Netto-Warenkorbwert* die Rohmarge in € des Warenkorbs "
+                            "(Σ Marge × Netto je Artikel). Der KPI „Ø CM2 / Warenkorb“ ist der Durchschnitt "
+                            "dieses CM2 über alle Warenkörbe mit diesem Produkt."
+                        )
 
                         co = (sub[sub["productId"] != pzn].groupby("order_id")["productname"]
                               .apply(lambda s: ", ".join(s.dropna().astype(str))))
