@@ -1020,6 +1020,29 @@ with tab_sales:
                 file_name=f"rennerliste_{ch.replace(' ', '_').lower()}.xlsx", key="ab_dl_a",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+            # ── Ø Warenkorb-CM2 je Preisklasse (Netto-Warenkorbwert) ──
+            if "order_id" in ol_range.columns and ol_range["order_id"].notna().any():
+                st.markdown("##### Ø Warenkorb-CM2 je Preisklasse")
+                bkc = ol_range[ol_range["order_id"].notna()].copy()
+                bkc["_m"] = pd.to_numeric(bkc["margin"], errors="coerce") * bkc["net"]
+                bb = bkc.groupby("order_id").agg(net=("net", "sum"), marge=("_m", "sum"))
+                bb["cm2"] = bb["marge"] - 0.06 * bb["net"] - 4.0
+                pk_edges = [1, 5, 10, 15, 20, 25, 30, 35, 40, 50, 75, 100, float("inf")]
+                pk_labels = ["1–5", "5–10", "10–15", "15–20", "20–25", "25–30",
+                             "30–35", "35–40", "40–50", "50–75", "75–100", ">100"]
+                bb["Preisklasse"] = pd.cut(bb["net"], bins=pk_edges, labels=pk_labels, right=False)
+                pk = bb.groupby("Preisklasse", observed=False).agg(
+                    cm2=("cm2", "mean"), n=("cm2", "size")).reset_index()
+                bars = alt.Chart(pk).mark_bar(color="#0D9488").encode(
+                    x=alt.X("Preisklasse:N", sort=pk_labels, title="Warenkorbwert (netto, €)"),
+                    y=alt.Y("cm2:Q", title="Ø CM2 / Warenkorb (€)"),
+                    tooltip=[alt.Tooltip("Preisklasse:N", title="Klasse"),
+                             alt.Tooltip("cm2:Q", format=".2f", title="Ø CM2 €"),
+                             alt.Tooltip("n:Q", title="Warenkörbe")],
+                )
+                st.altair_chart(bars, use_container_width=True)
+                st.caption("Alle Warenkörbe im gewählten Zeitraum, gruppiert nach Netto-Warenkorbwert.")
+
         # ── B) Preisänderungs-Wirkung ──────────────────────────────────────────
     with sub_b:
         if ol.empty:
