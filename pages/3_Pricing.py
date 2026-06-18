@@ -263,9 +263,9 @@ def render_orderlines_calendar(drive):
                 f"<table style='border-collapse:separate;border-spacing:2px'>"
                 f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
 
-    for row_start in range(1, 13, 2):
-        mcols = st.columns(2)
-        for i, month in enumerate(range(row_start, min(row_start + 2, 13))):
+    for row_start in range(1, 13, 4):
+        mcols = st.columns(4)
+        for i, month in enumerate(range(row_start, min(row_start + 4, 13))):
             mcols[i].markdown(_month_html(jahr, month), unsafe_allow_html=True)
     st.caption("Eingefärbte Tage enthalten Daten (Tooltip = Anzahl Orderlines).")
 
@@ -305,8 +305,9 @@ def render_pricing_settings(drive, cfg):
         st.markdown("##### Channel-Bezeichnungen")
         st.caption("Sprechende Namen für die Channel-Preisreihen – werden überall verwendet.")
         new_labels = {}
+        lcols = st.columns(len(CHANNEL_COLS))
         for i, c in enumerate(CHANNEL_COLS):
-            new_labels[c] = st.text_input(
+            new_labels[c] = lcols[i].text_input(
                 f"channelPrice{i + 1}",
                 value=cfg["channel_labels"].get(c, f"Channel {i + 1}"), key=f"set_lbl_{c}")
 
@@ -318,10 +319,12 @@ def render_pricing_settings(drive, cfg):
             return QUOTE_LABEL if r == REF_QUOTE else (cfg["channel_labels"].get(r) or r)
 
         new_map = {}
-        for s in sources:
+        scols = st.columns(3)
+        for i, s in enumerate(sources):
             cur = cfg["source_map"].get(s, REF_QUOTE)
             idx = opt_refs.index(cur) if cur in opt_refs else 0
-            sel = st.selectbox(s, opt_refs, index=idx, format_func=_opt_label, key=f"set_src_{s}")
+            sel = scols[i % 3].selectbox(s, opt_refs, index=idx,
+                                         format_func=_opt_label, key=f"set_src_{s}")
             if sel != REF_QUOTE:
                 new_map[s] = sel
 
@@ -367,6 +370,13 @@ with st.sidebar:
                                    help="Quelle: Download aus Channelpilot")
     orderlines_file = st.file_uploader("Orderlines (CSV)", type=["csv"], key="up_orderlines",
                                        help="Quelle: Metabase › Produkte & Hersteller › Pricing")
+    ic1, ic2, _ic = st.columns([1, 1, 3])
+    if ic1.button(":material/calendar_month:", key="btn_cal", help="Vorhandene Tage anzeigen"):
+        st.session_state["pricing_panel"] = (
+            None if st.session_state.get("pricing_panel") == "calendar" else "calendar")
+    if ic2.button(":material/settings:", key="btn_set", help="Einstellungen anzeigen"):
+        st.session_state["pricing_panel"] = (
+            None if st.session_state.get("pricing_panel") == "settings" else "settings")
     ol_modus = st.radio(
         "Orderlines-Modus", ["Nur neue Tage anhängen", "Doppelte Tage ersetzen"], key="up_ol_mode",
         help="Anhängen: vorhandene Tage bleiben unverändert. "
@@ -442,16 +452,6 @@ with st.sidebar:
         load_snapshot.clear()
         st.success(f"Gespeichert: {', '.join(gespeichert)}")
 
-    # ── Orderlines verwalten: Kalender / Einstellungen hinter Icons ──
-    st.divider()
-    pop1, pop2 = st.columns(2)
-    with pop1:
-        with st.popover(":material/calendar_month:", use_container_width=True, help="Vorhandene Tage / löschen"):
-            render_orderlines_calendar(drive)
-    with pop2:
-        with st.popover(":material/settings:", use_container_width=True, help="Einstellungen"):
-            render_pricing_settings(drive, cfg)
-
     # Vorhandene Snapshots anzeigen
     st.divider()
     st.markdown("##### Gespeicherte Zeitpunkte")
@@ -466,6 +466,21 @@ with st.sidebar:
             "Master": "Ja" if v.get("master_id") else "—",
         } for k, v in _snaps.items()]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+# ── Info-Panel (Kalender / Einstellungen) – über die Icons links geöffnet ──
+_panel = st.session_state.get("pricing_panel")
+if _panel:
+    with st.container(border=True):
+        pc1, pc2 = st.columns([6, 1])
+        pc1.markdown("#### " + ("Vorhandene Tage (Orderlines)" if _panel == "calendar"
+                                else "Einstellungen"))
+        if pc2.button(":material/close: Schließen", key="panel_close", use_container_width=True):
+            st.session_state["pricing_panel"] = None
+            st.rerun()
+        if _panel == "calendar":
+            render_orderlines_calendar(drive)
+        else:
+            render_pricing_settings(drive, cfg)
 
 tab_snap, tab_cmp, tab_master, tab_renner, tab_wirkung, tab_produkt = st.tabs(
     [":material/bar_chart: Momentaufnahme", ":material/compare_arrows: Vergleich", ":material/folder_open: Masterdatei-Analyse", ":material/leaderboard: Rennerliste", ":material/insights: Preisänderungs-Wirkung", ":material/search: Produktansicht"]
