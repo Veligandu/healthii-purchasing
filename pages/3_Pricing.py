@@ -240,7 +240,7 @@ def render_orderlines_upload(drive):
                        f"{ol_new['date'].min()} – {ol_new['date'].max()}".replace(",", "."))
         except Exception as e:
             st.error(f"Nicht lesbar: {e}")
-    if st.button("➕ Orderlines übernehmen", type="primary", use_container_width=True,
+    if st.button(":material/add: Orderlines übernehmen", type="primary", use_container_width=True,
                  disabled=ol_new is None, key="sb_ol_apply"):
         mode = "replace" if modus == "Doppelte Tage ersetzen" else "append"
         existing = pl.load_orderlines(drive)
@@ -311,7 +311,7 @@ def render_orderlines_calendar(drive):
                                 format="DD.MM.YYYY", key="ol_del_bis")
     betroffen = int(ol[(ol["date"] >= del_von.isoformat()) & (ol["date"] <= del_bis.isoformat())].shape[0])
     st.caption(f"Betroffen: {betroffen:,} Zeilen".replace(",", "."))
-    if st.button("🗑️ Zeitraum löschen", disabled=betroffen == 0, key="ol_del_btn"):
+    if st.button(":material/delete: Zeitraum löschen", disabled=betroffen == 0, key="ol_del_btn"):
         rest = pl.delete_orderlines_range(pl.load_orderlines(drive),
                                           del_von.isoformat(), del_bis.isoformat())
         folder_id = get_pricing_folder_id(drive)
@@ -453,10 +453,10 @@ with st.sidebar:
     render_orderlines_upload(drive)
     pop1, pop2 = st.columns(2)
     with pop1:
-        with st.popover("🗓️", use_container_width=True, help="Vorhandene Tage / löschen"):
+        with st.popover(":material/calendar_month:", use_container_width=True, help="Vorhandene Tage / löschen"):
             render_orderlines_calendar(drive)
     with pop2:
-        with st.popover("⚙️", use_container_width=True, help="Einstellungen"):
+        with st.popover(":material/settings:", use_container_width=True, help="Einstellungen"):
             render_pricing_settings(drive, cfg)
 
     # Vorhandene Snapshots anzeigen
