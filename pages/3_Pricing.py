@@ -1466,15 +1466,34 @@ def render_produktansicht():
                         last = last.rename(columns={
                             "order_id": "Bestellnr.", "datum": "Datum",
                             "pos": "Positionen", "wert": "Warenkorbwert netto €"})
-                        st.dataframe(
+                        st.caption("Zeile anklicken, um alle Positionen des Warenkorbs zu sehen. "
+                                   "Alle Warenkorbwerte sind Netto-Werte (TotalNet).")
+                        ev = st.dataframe(
                             last[["Datum", "Bestellnr.", "Positionen", "Warenkorbwert netto €", "Mitgekaufte Artikel"]],
                             use_container_width=True, hide_index=True,
+                            on_select="rerun", selection_mode="single-row", key="pv_basket_sel",
                             column_config={
                                 "Positionen": st.column_config.NumberColumn(format="%d"),
                                 "Warenkorbwert netto €": st.column_config.NumberColumn(format="%.2f €"),
                             },
                         )
-                        st.caption("Alle Warenkorbwerte sind Netto-Werte (TotalNet).")
+                        if ev.selection.rows:
+                            oid = last.iloc[ev.selection.rows[0]]["Bestellnr."]
+                            pos = sub[sub["order_id"] == oid][
+                                ["productId", "productname", "quantity", "net"]].copy()
+                            pos.insert(0, "", pos["productId"].apply(lambda p: "▶" if p == pzn else ""))
+                            pos = pos.rename(columns={
+                                "productId": "PZN", "productname": "Produkt",
+                                "quantity": "Menge", "net": "Netto €"})
+                            st.markdown(f"**Warenkorb {oid} — {len(pos)} Positionen**")
+                            st.dataframe(
+                                pos, use_container_width=True, hide_index=True,
+                                column_config={
+                                    "": st.column_config.TextColumn(width="small"),
+                                    "Menge": st.column_config.NumberColumn(format="%d"),
+                                    "Netto €": st.column_config.NumberColumn(format="%.2f €"),
+                                },
+                            )
 
                         # ── Source-Verteilung der Warenkörbe ──
                         st.divider()
