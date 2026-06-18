@@ -1369,15 +1369,20 @@ with tab_produkt:
                         st.info("Dieses Produkt kommt in keinem Warenkorb mit Bestellnummer vor.")
                     else:
                         sub = olb[olb["order_id"].isin(orders)].copy()
+                        # relative Marge ist ein Anteil (margin × net = Rohmarge €)
+                        sub["_marge_eur"] = pd.to_numeric(sub["margin"], errors="coerce") * sub["net"]
                         basket = sub.groupby("order_id").agg(
-                            datum=("date", "max"), wert=("net", "sum"), pos=("productId", "count"))
+                            datum=("date", "max"), wert=("net", "sum"), pos=("productId", "count"),
+                            marge_eur=("_marge_eur", "sum"))
                         thisv = sub[sub["productId"] == pzn].groupby("order_id")["net"].sum()
                         basket["andere"] = basket["wert"] - basket.index.map(thisv).fillna(0.0)
+                        basket["rel_marge"] = basket["marge_eur"] / basket["wert"]
 
-                        b1, b2, b3 = st.columns(3)
+                        b1, b2, b3, b4 = st.columns(4)
                         b1.metric("Warenkörbe mit Produkt", f"{len(basket):,}".replace(",", "."))
                         b2.metric("Ø Warenkorbwert (netto)", f"{basket['wert'].mean():.2f} €")
                         b3.metric("Ø mitgekaufter Wert (netto)", f"{basket['andere'].mean():.2f} €")
+                        b4.metric("Ø relative Marge", f"{basket['rel_marge'].mean() * 100:.1f} %")
 
                         co = (sub[sub["productId"] != pzn].groupby("order_id")["productname"]
                               .apply(lambda s: ", ".join(s.dropna().astype(str))))
