@@ -362,6 +362,16 @@ with st.sidebar:
     st.caption("Quote-, Channel-, Masterdatei (eines Zeitpunkts) und Orderlines. "
                "Datum für Preise/Master wird aus dem Dateinamen erkannt.")
 
+    # Snapshot-Datum oben – aus bereits hochgeladenen Dateien vorbelegt (session_state)
+    _erk = None
+    for _k in ("up_quote", "up_channel", "up_master"):
+        _f = st.session_state.get(_k)
+        if _f is not None:
+            _erk = parse_date_from_filename(_f.name) or _erk
+    snap_datum = st.date_input(
+        "Datum des Snapshots (Preise/Master)", value=_erk or date.today(), format="DD.MM.YYYY"
+    )
+
     quote_file = st.file_uploader("Quote-Preise (CSV)", type=["csv"], key="up_quote",
                                   help="Quelle: Google Drive › Pricing")
     channel_file = st.file_uploader("Channel-Preise (CSV)", type=["csv"], key="up_channel",
@@ -386,16 +396,6 @@ with st.sidebar:
              "Ersetzen: für Tage in der neuen Datei werden alte Zeilen überschrieben.",
     )
 
-    # Datum vorbelegen aus Dateinamen (Preise/Master)
-    erkanntes_datum = None
-    for f in (quote_file, channel_file, master_file):
-        if f is not None:
-            erkanntes_datum = parse_date_from_filename(f.name) or erkanntes_datum
-
-    snap_datum = st.date_input(
-        "Datum des Snapshots (Preise/Master)", value=erkanntes_datum or date.today(),
-        format="DD.MM.YYYY"
-    )
 
     # Vorschau
     if quote_file is not None:
