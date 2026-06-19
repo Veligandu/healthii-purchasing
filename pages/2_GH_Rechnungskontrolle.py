@@ -1088,11 +1088,11 @@ with st.sidebar:
 
     # Healthii-EK-Preise: zentrale Master-Liste (gilt für alle GHs/Monate)
     st.header(":material/euro: Healthii-EK-Preise")
-    st.caption("Zentrale Preisliste — gilt für alle Großhändler. Upload erweitert die Liste.")
+    st.caption("Zentrale Preisliste — gilt für alle Großhändler.")
     preis_csv = st.file_uploader(
         "Preisliste (CSV)",
         type=["csv"],
-        help="CSV mit PZN, Preis und optional valid_from/valid_till. ; oder , als Trenner.",
+        help="csv in BigQuery - 453513.productdata_hub.stg_ek_prices_raw",
         key="preis_csv_master",
     )
     st.caption("Upload erweitert die Liste — bereits vorhandene Preise werden übersprungen.")
