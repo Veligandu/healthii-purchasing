@@ -472,44 +472,63 @@ def lade_abr_pdfs_aus_drive(_drive, gh, jahr, monat):
 
 # ─── Zentrale Healthii-EK-Preisliste (GH-übergreifend) ────────────────────────
 
-PREISE_MASTER_NAME = "preise_master.xlsx"
+PREISE_MASTER_PARQUET = "preise_master.parquet"
+PREISE_MASTER_XLSX    = "preise_master.xlsx"   # Altformat (nur noch lesen)
 
-def speichere_preise_master(_drive, df_raw):
-    """Speichert die Preis-Rohdaten (PZN, Preis, valid_from, valid_till) zentral in Drive."""
+def _drive_finde(_drive, folder_id, name):
+    q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
+    return _drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
+
+
+def _drive_upload(_drive, folder_id, name, buf, mimetype):
     from googleapiclient.http import MediaIoBaseUpload
-    folder_id = get_gh_folder_id(_drive)
-    buf = io.BytesIO()
-    df_raw.to_excel(buf, index=False, sheet_name="Preise")
     buf.seek(0)
-    media = MediaIoBaseUpload(
-        buf, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    q = f"name='{PREISE_MASTER_NAME}' and '{folder_id}' in parents and trashed=false"
-    existing = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
+    media = MediaIoBaseUpload(buf, mimetype=mimetype)
+    existing = _drive_finde(_drive, folder_id, name)
     if existing:
         _drive.files().update(fileId=existing[0]["id"], media_body=media).execute()
     else:
-        _drive.files().create(
-            body={"name": PREISE_MASTER_NAME, "parents": [folder_id]},
-            media_body=media, fields="id",
-        ).execute()
+        _drive.files().create(body={"name": name, "parents": [folder_id]},
+                              media_body=media, fields="id").execute()
+
+
+def speichere_preise_master(_drive, df_raw):
+    """Speichert die zentrale Preis-Rohtabelle als Parquet in Drive (schnell, kompakt)."""
+    folder_id = get_gh_folder_id(_drive)
+    buf = io.BytesIO()
+    df_raw.to_parquet(buf, index=False)
+    _drive_upload(_drive, folder_id, PREISE_MASTER_PARQUET, buf,
+                  "application/octet-stream")
+    # veraltete xlsx-Version aufräumen, damit sie nicht mehr gelesen wird
+    try:
+        for f in _drive_finde(_drive, folder_id, PREISE_MASTER_XLSX):
+            _drive.files().update(fileId=f["id"], body={"trashed": True}).execute()
+    except Exception:
+        pass
+
+
+def _drive_download(_drive, file_id):
+    from googleapiclient.http import MediaIoBaseDownload
+    buf = io.BytesIO()
+    dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=file_id))
+    done = False
+    while not done:
+        _, done = dl.next_chunk()
+    buf.seek(0)
+    return buf
 
 
 def lade_preise_master(_drive):
-    """Lädt die zentrale Preis-Rohdaten-Tabelle. Gibt DataFrame oder None zurück."""
+    """Lädt die zentrale Preis-Rohtabelle (Parquet bevorzugt, sonst Alt-xlsx)."""
     try:
-        from googleapiclient.http import MediaIoBaseDownload
         folder_id = get_gh_folder_id(_drive)
-        q = f"name='{PREISE_MASTER_NAME}' and '{folder_id}' in parents and trashed=false"
-        files = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
-        if not files:
-            return None
-        buf = io.BytesIO()
-        dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=files[0]["id"]))
-        done = False
-        while not done:
-            _, done = dl.next_chunk()
-        buf.seek(0)
-        return pd.read_excel(buf, dtype={"PZN": str})
+        files = _drive_finde(_drive, folder_id, PREISE_MASTER_PARQUET)
+        if files:
+            return pd.read_parquet(_drive_download(_drive, files[0]["id"]))
+        files = _drive_finde(_drive, folder_id, PREISE_MASTER_XLSX)  # Altformat
+        if files:
+            return pd.read_excel(_drive_download(_drive, files[0]["id"]), dtype={"PZN": str})
+        return None
     except Exception:
         return None
 
@@ -645,24 +664,30 @@ def parse_preis_csv_raw(datei_bytes: bytes) -> pd.DataFrame:
     from_col = _find("valid_from", "gueltig_von", "von", exclude=pzn_col)
     till_col = _find("valid_till", "valid_to", "gueltig_bis", "bis", exclude=pzn_col)
 
-    zeilen = []
-    for _, row in df.iterrows():
-        pzn = re.sub(r"\D", "", str(row[pzn_col]))
-        if not pzn:
-            continue
-        preis = _preis_zu_float(row[preis_col])
-        if preis is None:
-            continue
-        vf = pd.to_datetime(row[from_col], errors="coerce") if from_col else pd.NaT
-        vt = pd.to_datetime(row[till_col], errors="coerce") if till_col else pd.NaT
-        zeilen.append({
-            "PZN":        pzn.zfill(8),
-            "Preis":      preis,
-            "source":     (str(row[src_col]).strip().upper() if src_col else ""),
-            "valid_from": vf.date().isoformat() if pd.notna(vf) else "",
-            "valid_till": vt.date().isoformat() if pd.notna(vt) else "",
-        })
-    return pd.DataFrame(zeilen, columns=["PZN", "Preis", "source", "valid_from", "valid_till"])
+    # ── vektorisiert (keine Zeilen-Schleife) ──
+    pzn = df[pzn_col].astype(str).str.replace(r"\D", "", regex=True).str.zfill(8)
+
+    s = (df[preis_col].astype(str).str.strip()
+         .str.replace("€", "", regex=False).str.replace(" ", "", regex=False))
+    hat_komma = s.str.contains(",", regex=False)
+    s_de = s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
+    preis = pd.to_numeric(s.where(~hat_komma, s_de), errors="coerce")
+
+    def _datum(col):
+        if not col:
+            return pd.Series([""] * len(df), index=df.index)
+        return pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+
+    out = pd.DataFrame({
+        "PZN":        pzn,
+        "Preis":      preis,
+        "source":     (df[src_col].astype(str).str.strip().str.upper()
+                       if src_col else pd.Series([""] * len(df), index=df.index)),
+        "valid_from": _datum(from_col),
+        "valid_till": _datum(till_col),
+    })
+    out = out[(out["PZN"].str.replace("0", "", regex=False) != "") & out["Preis"].notna()]
+    return out.reset_index(drop=True)[["PZN", "Preis", "source", "valid_from", "valid_till"]]
 
 
 def resolve_preise(df_raw, jahr: int, monat: int, source=None) -> dict:

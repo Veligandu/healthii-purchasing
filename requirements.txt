@@ -6,3 +6,4 @@ google-auth-httplib2>=0.1.0
 google-auth-oauthlib>=1.1.0
 pdfplumber>=0.11.0
 streamlit-pdf-viewer>=0.0.19
+pyarrow>=14.0.0
