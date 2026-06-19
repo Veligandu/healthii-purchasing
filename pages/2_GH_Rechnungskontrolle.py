@@ -352,19 +352,34 @@ def get_pdf_folder_id(_drive, gh, jahr, monat, anlegen=True, prefix="pdfs"):
     return folder["id"]
 
 
+def _drive_dateinamen(_drive, folder_id):
+    """Set aller Dateinamen im Ordner — ein paginierter Aufruf statt vieler Einzelabfragen."""
+    namen = set()
+    token = None
+    while True:
+        res = _drive.files().list(
+            q=f"'{folder_id}' in parents and trashed=false",
+            fields="nextPageToken, files(name)", pageSize=1000, pageToken=token,
+        ).execute()
+        namen.update(f["name"] for f in res.get("files", []))
+        token = res.get("nextPageToken")
+        if not token:
+            break
+    return namen
+
+
 def speichere_pdfs_in_drive(_drive, gh, pdfs, jahr, monat):
     """Lädt nur noch nicht abgelegte Original-PDFs in den Monats-Unterordner hoch.
-    Gibt die Anzahl neu hochgeladener PDFs zurück."""
+    Prüft die Existenz mit EINER Ordnerauflistung. Gibt Anzahl neu hochgeladener zurück."""
     from googleapiclient.http import MediaIoBaseUpload
     if not pdfs:
         return 0
     folder_id = get_pdf_folder_id(_drive, gh, jahr, monat, anlegen=True)
+    vorhanden = _drive_dateinamen(_drive, folder_id)
     neu = 0
     for beleg, raw in pdfs.items():
         name = f"INVOICE-{beleg}.pdf"
-        q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
-        existing = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
-        if existing:
+        if name in vorhanden:
             continue  # bereits vorhanden → überspringen
         media = MediaIoBaseUpload(io.BytesIO(raw), mimetype="application/pdf")
         _drive.files().create(
@@ -430,12 +445,11 @@ def speichere_abr_pdfs_in_drive(_drive, gh, pdfs, jahr, monat):
     if not pdfs:
         return 0
     folder_id = get_pdf_folder_id(_drive, gh, jahr, monat, anlegen=True, prefix="abrechnungen")
+    vorhanden = _drive_dateinamen(_drive, folder_id)
     neu = 0
     for name, raw in pdfs.items():
         name = str(name).replace("'", "_")
-        q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
-        existing = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
-        if existing:
+        if name in vorhanden:
             continue  # bereits vorhanden → überspringen
         media = MediaIoBaseUpload(io.BytesIO(raw), mimetype="application/pdf")
         _drive.files().create(
