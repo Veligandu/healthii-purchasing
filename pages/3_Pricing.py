@@ -223,73 +223,101 @@ def load_report(_drive, iso_datum):
 
 # ─── Orderlines-Verwaltung (Sidebar-Upload, Kalender-/Einstellungen-Popover) ─────
 
-def render_orderlines_calendar(drive):
-    """Kalender-Jahresansicht der vorhandenen Tage + Zeitraum löschen (im Popover)."""
+def _data_by_date(drive):
+    """Pro ISO-Datum: vorhandene Datenarten (Snapshot-Tags + Orderlines-Anzahl)."""
+    info = {}
+    for iso, v in list_snapshots(drive).items():
+        tags = [t for t, k in (("Quote", "quote_id"), ("Channel", "channel_id"),
+                                ("Master", "master_id")) if v.get(k)]
+        if tags:
+            info[iso] = {"snap": tags, "ol": 0}
     ol = load_orderlines(drive)
-    if ol.empty:
-        st.info("Noch keine Orderlines gespeichert.")
+    if not ol.empty:
+        for iso, n in ol.groupby("date").size().items():
+            info.setdefault(iso, {"snap": [], "ol": 0})["ol"] = int(n)
+    return info
+
+
+def _cal_month_html(year, month, info):
+    head = "".join(f"<th style='padding:2px;color:#9CA3AF;font-size:9px;font-weight:600'>{d}</th>"
+                   for d in ["M", "D", "M", "D", "F", "S", "S"])
+    body = ""
+    for wk in calendar.Calendar(firstweekday=0).monthdayscalendar(year, month):
+        cells = ""
+        for day in wk:
+            if day == 0:
+                cells += "<td></td>"
+                continue
+            d = info.get(f"{year:04d}-{month:02d}-{day:02d}")
+            if d:
+                parts = list(d["snap"])
+                if d["ol"]:
+                    parts.append(f"Orderlines: {d['ol']:,}".replace(",", "."))
+                tip = " · ".join(parts) or "Daten"
+                cells += (f"<td title='{tip}' style='padding:3px;text-align:center;font-size:10px;"
+                          f"font-weight:600;background:#CCFBF1;color:#0F766E;border:1px solid #99F6E4;"
+                          f"border-radius:4px'>{day}</td>")
+            else:
+                cells += (f"<td style='padding:3px;text-align:center;font-size:10px;"
+                          f"color:#D1D5DB'>{day}</td>")
+        body += f"<tr>{cells}</tr>"
+    return (f"<div style='font-weight:600;font-size:12px;color:#374151;margin-bottom:4px'>"
+            f"{calendar.month_name[month]} {year}</div>"
+            f"<table style='border-collapse:separate;border-spacing:2px'>"
+            f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
+
+
+def render_mini_calendar(drive):
+    """Aktueller Monat in der Sidebar: welche Daten je Datum + Link zur Vollansicht."""
+    info = _data_by_date(drive)
+    today = date.today()
+    st.markdown("##### Daten je Datum")
+    st.markdown(_cal_month_html(today.year, today.month, info), unsafe_allow_html=True)
+    st.caption("Eingefärbte Tage haben Daten (Tooltip: Quote/Channel/Master/Orderlines).")
+    lc, gc = st.columns([5, 1], vertical_alignment="center")
+    if lc.button("Gesamte Kalenderansicht", type="tertiary", key="open_full_cal"):
+        st.session_state["pricing_panel"] = "calendar"
+    if gc.button(":material/settings:", type="tertiary", key="btn_set", help="Einstellungen anzeigen"):
+        st.session_state["pricing_panel"] = (
+            None if st.session_state.get("pricing_panel") == "settings" else "settings")
+
+
+def render_data_calendar(drive):
+    """Vollständige Kalenderansicht (Jahr) im Hauptbereich + Orderlines-Zeitraum löschen."""
+    info = _data_by_date(drive)
+    if not info:
+        st.info("Noch keine Daten vorhanden.")
         return
-    tage = ol.groupby("date").size()
-    d_all = ol["d"]
-    st.caption(
-        f"Gespeichert: {len(ol):,} Zeilen · {d_all.min():%d.%m.%Y} – {d_all.max():%d.%m.%Y} "
-        f"· {ol['date'].nunique()} Tage".replace(",", ".")
-    )
-    jahre = sorted({d.year for d in d_all}, reverse=True)
-    jahr = st.selectbox("Jahr", jahre, index=0, key="ol_cal_y")
-    counts = {k: int(v) for k, v in tage.items()}
-
-    def _month_html(year, month):
-        head = "".join(f"<th style='padding:2px;color:#9CA3AF;font-size:9px;font-weight:600'>{d}</th>"
-                       for d in ["M", "D", "M", "D", "F", "S", "S"])
-        body = ""
-        for wk in calendar.Calendar(firstweekday=0).monthdayscalendar(year, month):
-            cells = ""
-            for day in wk:
-                if day == 0:
-                    cells += "<td></td>"
-                    continue
-                n = counts.get(f"{year:04d}-{month:02d}-{day:02d}", 0)
-                if n > 0:
-                    cells += (f"<td title='{n} Orderlines' style='padding:3px;text-align:center;"
-                              f"font-size:10px;font-weight:600;background:#CCFBF1;color:#0F766E;"
-                              f"border:1px solid #99F6E4;border-radius:4px'>{day}</td>")
-                else:
-                    cells += (f"<td style='padding:3px;text-align:center;font-size:10px;"
-                              f"color:#D1D5DB'>{day}</td>")
-            body += f"<tr>{cells}</tr>"
-        return (f"<div style='font-weight:600;font-size:12px;color:#374151;margin-bottom:4px'>"
-                f"{calendar.month_name[month]}</div>"
-                f"<table style='border-collapse:separate;border-spacing:2px'>"
-                f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
-
+    jahre = sorted({iso[:4] for iso in info}, reverse=True)
+    jahr = int(st.selectbox("Jahr", jahre, index=0, key="cal_year"))
+    st.caption("Eingefärbte Tage haben Daten (Tooltip: Quote/Channel/Master/Orderlines).")
     for row_start in range(1, 13, 4):
         mcols = st.columns(4)
         for i, month in enumerate(range(row_start, min(row_start + 4, 13))):
-            mcols[i].markdown(_month_html(jahr, month), unsafe_allow_html=True)
-    st.caption("Eingefärbte Tage enthalten Daten (Tooltip = Anzahl Orderlines).")
+            mcols[i].markdown(_cal_month_html(jahr, month, info), unsafe_allow_html=True)
 
-    st.divider()
-    st.markdown("##### Zeitraum löschen")
-    dmin_d, dmax_d = d_all.min().date(), d_all.max().date()
-    dc1, dc2 = st.columns(2)
-    with dc1:
-        del_von = st.date_input("Von", value=dmin_d, min_value=dmin_d, max_value=dmax_d,
-                                format="DD.MM.YYYY", key="ol_del_von")
-    with dc2:
-        del_bis = st.date_input("Bis", value=dmax_d, min_value=dmin_d, max_value=dmax_d,
-                                format="DD.MM.YYYY", key="ol_del_bis")
-    betroffen = int(ol[(ol["date"] >= del_von.isoformat()) & (ol["date"] <= del_bis.isoformat())].shape[0])
-    st.caption(f"Betroffen: {betroffen:,} Zeilen".replace(",", "."))
-    if st.button(":material/delete: Zeitraum löschen", disabled=betroffen == 0, key="ol_del_btn"):
-        rest = pl.delete_orderlines_range(pl.load_orderlines(drive),
-                                          del_von.isoformat(), del_bis.isoformat())
-        folder_id = get_pricing_folder_id(drive)
-        upload_bytes_to_drive(drive, rest.to_csv(index=False).encode("utf-8"),
-                              pl.ORDERLINES_FILE, folder_id, "text/csv")
-        load_orderlines.clear()
-        st.success(f"{betroffen:,} Zeilen gelöscht.".replace(",", "."))
-        st.rerun()
+    ol = load_orderlines(drive)
+    if not ol.empty:
+        st.divider()
+        st.markdown("##### Orderlines-Zeitraum löschen")
+        d_all = ol["d"]
+        dmin_d, dmax_d = d_all.min().date(), d_all.max().date()
+        dc1, dc2 = st.columns(2)
+        del_von = dc1.date_input("Von", value=dmin_d, min_value=dmin_d, max_value=dmax_d,
+                                 format="DD.MM.YYYY", key="ol_del_von")
+        del_bis = dc2.date_input("Bis", value=dmax_d, min_value=dmin_d, max_value=dmax_d,
+                                 format="DD.MM.YYYY", key="ol_del_bis")
+        betroffen = int(ol[(ol["date"] >= del_von.isoformat()) & (ol["date"] <= del_bis.isoformat())].shape[0])
+        st.caption(f"Betroffen: {betroffen:,} Zeilen".replace(",", "."))
+        if st.button(":material/delete: Zeitraum löschen", disabled=betroffen == 0, key="ol_del_btn"):
+            rest = pl.delete_orderlines_range(pl.load_orderlines(drive),
+                                              del_von.isoformat(), del_bis.isoformat())
+            folder_id = get_pricing_folder_id(drive)
+            upload_bytes_to_drive(drive, rest.to_csv(index=False).encode("utf-8"),
+                                  pl.ORDERLINES_FILE, folder_id, "text/csv")
+            load_orderlines.clear()
+            st.success(f"{betroffen:,} Zeilen gelöscht.".replace(",", "."))
+            st.rerun()
 
 
 def render_pricing_settings(drive, cfg):
@@ -378,18 +406,8 @@ with st.sidebar:
                                     help="Quelle: Google Drive › Pricing")
     master_file = st.file_uploader("Masterdatei (CSV)", type=["csv"], key="up_master",
                                    help="Quelle: Download aus Channelpilot")
-    oh1, oh2, oh3 = st.columns([5, 1, 1], vertical_alignment="center")
-    oh1.markdown("Orderlines (CSV)", help="Quelle: Metabase › Produkte & Hersteller › Pricing")
-    if oh2.button(":material/calendar_month:", key="btn_cal", type="tertiary",
-                  help="Vorhandene Tage anzeigen"):
-        st.session_state["pricing_panel"] = (
-            None if st.session_state.get("pricing_panel") == "calendar" else "calendar")
-    if oh3.button(":material/settings:", key="btn_set", type="tertiary",
-                  help="Einstellungen anzeigen"):
-        st.session_state["pricing_panel"] = (
-            None if st.session_state.get("pricing_panel") == "settings" else "settings")
     orderlines_file = st.file_uploader("Orderlines (CSV)", type=["csv"], key="up_orderlines",
-                                       label_visibility="collapsed")
+                                       help="Quelle: Metabase › Produkte & Hersteller › Pricing")
     ol_modus = st.radio(
         "Orderlines-Modus", ["Nur neue Tage anhängen", "Doppelte Tage ersetzen"], key="up_ol_mode",
         help="Anhängen: vorhandene Tage bleiben unverändert. "
@@ -455,33 +473,21 @@ with st.sidebar:
         load_snapshot.clear()
         st.success(f"Gespeichert: {', '.join(gespeichert)}")
 
-    # Vorhandene Snapshots anzeigen
+    # Daten je Datum (aktueller Monat) + Link zur Vollansicht
     st.divider()
-    st.markdown("##### Gespeicherte Zeitpunkte")
-    _snaps = list_snapshots(drive)
-    if not _snaps:
-        st.caption("Noch keine Snapshots gespeichert.")
-    else:
-        rows = [{
-            "Datum": fmt_date(k),
-            "Quote": "Ja" if v["quote_id"] else "—",
-            "Channel": "Ja" if v["channel_id"] else "—",
-            "Master": "Ja" if v.get("master_id") else "—",
-        } for k, v in _snaps.items()]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    render_mini_calendar(drive)
 
 # ── Info-Panel (Kalender / Einstellungen) – über die Icons links geöffnet ──
 _panel = st.session_state.get("pricing_panel")
 if _panel:
     with st.container(border=True):
         pc1, pc2 = st.columns([6, 1])
-        pc1.markdown("#### " + ("Vorhandene Tage (Orderlines)" if _panel == "calendar"
-                                else "Einstellungen"))
+        pc1.markdown("#### " + ("Daten je Datum" if _panel == "calendar" else "Einstellungen"))
         if pc2.button(":material/close: Schließen", key="panel_close", use_container_width=True):
             st.session_state["pricing_panel"] = None
             st.rerun()
         if _panel == "calendar":
-            render_orderlines_calendar(drive)
+            render_data_calendar(drive)
         else:
             render_pricing_settings(drive, cfg)
 
