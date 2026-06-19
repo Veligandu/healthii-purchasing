@@ -1095,18 +1095,24 @@ with st.sidebar:
         help="CSV mit PZN, Preis und optional valid_from/valid_till. ; oder , als Trenner.",
         key="preis_csv_master",
     )
-    st.caption("Upload ersetzt nur die enthaltenen Quellen (PHX/GWC/AHD); andere bleiben erhalten.")
-    if st.button("▶ Preise aktualisieren", use_container_width=True, disabled=not preis_csv):
+    st.caption("Upload erweitert die Liste — bereits vorhandene Preise werden übersprungen.")
+    if st.button("▶ Preise hinzufügen", use_container_width=True, disabled=not preis_csv):
         df_neu = parse_preis_csv_raw(preis_csv.read())
         if not df_neu.empty:
-            # Merge je source: vorhandene Quellen, die im Upload sind, ersetzen
+            # Erweitern: vorhandene (PZN+source+valid_from+valid_till) bleiben, neue kommen dazu
             df_alt = st.session_state.get("gh_preise_master")
-            src_neu = set(df_neu["source"].astype(str).str.upper().unique())
-            if df_alt is not None and not df_alt.empty and "source" in df_alt.columns:
-                df_alt = df_alt[~df_alt["source"].astype(str).str.upper().isin(src_neu)]
+            _key = ["PZN", "source", "valid_from", "valid_till"]
+            if df_alt is not None and not df_alt.empty:
+                _alt_n = len(df_alt)
                 df_master = pd.concat([df_alt, df_neu], ignore_index=True)
+                _sub = [c for c in _key if c in df_master.columns]
+                df_master = df_master.drop_duplicates(subset=_sub, keep="first").reset_index(drop=True)
+                n_neu = len(df_master) - _alt_n
             else:
-                df_master = df_neu
+                df_master = df_neu.drop_duplicates(
+                    subset=[c for c in _key if c in df_neu.columns], keep="first"
+                ).reset_index(drop=True)
+                n_neu = len(df_master)
             _master_setzen(df_master)
             ok = True
             if drive:
@@ -1116,8 +1122,8 @@ with st.sidebar:
                     ok = False
                     st.error(f"Drive-Fehler beim Speichern der Preise: {e}")
             if ok:
-                _vc = df_neu["source"].astype(str).str.upper().value_counts().to_dict()
-                st.success(f"Aktualisiert: { {k:int(v) for k,v in _vc.items()} }"
+                n_skip = len(df_neu) - n_neu
+                st.success(f"{n_neu} neue Preiszeilen hinzugefügt, {n_skip} bereits vorhanden (übersprungen)"
                            + (" · in Drive gespeichert" if drive else ""))
         else:
             st.error("Keine PZN/Preis-Paare erkannt. Spalten prüfen.")
