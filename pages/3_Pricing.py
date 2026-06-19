@@ -238,7 +238,21 @@ def _data_by_date(drive):
     return info
 
 
-def _cal_month_html(year, month, info):
+# Datenart → Farbe (für Punkte im Kalender + Legende)
+CAL_TYPE_COLORS = [("Quote", "#0D9488"), ("Channel", "#6366F1"),
+                   ("Master", "#F59E0B"), ("Orderlines", "#DB2777")]
+
+
+def _cal_legend_html():
+    items = "".join(
+        f"<span style='margin-right:10px;white-space:nowrap;font-size:10px;color:#6B7280'>"
+        f"<span style='width:8px;height:8px;border-radius:50%;background:{c};"
+        f"display:inline-block;margin-right:3px'></span>{name}</span>"
+        for name, c in CAL_TYPE_COLORS)
+    return f"<div style='margin-top:4px'>{items}</div>"
+
+
+def _cal_month_html(year, month, info, show_title=True):
     head = "".join(f"<th style='padding:2px;color:#9CA3AF;font-size:9px;font-weight:600'>{d}</th>"
                    for d in ["M", "D", "M", "D", "F", "S", "S"])
     body = ""
@@ -250,36 +264,45 @@ def _cal_month_html(year, month, info):
                 continue
             d = info.get(f"{year:04d}-{month:02d}-{day:02d}")
             if d:
-                parts = list(d["snap"])
+                present = list(d["snap"]) + (["Orderlines"] if d["ol"] else [])
+                tip_parts = list(d["snap"])
                 if d["ol"]:
-                    parts.append(f"Orderlines: {d['ol']:,}".replace(",", "."))
-                tip = " · ".join(parts) or "Daten"
-                cells += (f"<td title='{tip}' style='padding:3px;text-align:center;font-size:10px;"
-                          f"font-weight:600;background:#CCFBF1;color:#0F766E;border:1px solid #99F6E4;"
-                          f"border-radius:4px'>{day}</td>")
+                    tip_parts.append(f"Orderlines: {d['ol']:,}".replace(",", "."))
+                tip = " · ".join(tip_parts) or "Daten"
+                dots = "".join(
+                    f"<span style='width:5px;height:5px;border-radius:50%;background:{c};"
+                    f"display:inline-block;margin:0 1px'></span>"
+                    for name, c in CAL_TYPE_COLORS if name in present)
+                cells += (f"<td title='{tip}' style='padding:2px;text-align:center;border:1px solid "
+                          f"#E5E7EB;border-radius:4px'>"
+                          f"<div style='font-size:10px;font-weight:600;color:#374151'>{day}</div>"
+                          f"<div style='height:5px;line-height:5px'>{dots}</div></td>")
             else:
-                cells += (f"<td style='padding:3px;text-align:center;font-size:10px;"
-                          f"color:#D1D5DB'>{day}</td>")
+                cells += (f"<td style='padding:2px;text-align:center'>"
+                          f"<div style='font-size:10px;color:#D1D5DB'>{day}</div>"
+                          f"<div style='height:5px'></div></td>")
         body += f"<tr>{cells}</tr>"
-    return (f"<div style='font-weight:600;font-size:12px;color:#374151;margin-bottom:4px'>"
-            f"{calendar.month_name[month]} {year}</div>"
-            f"<table style='border-collapse:separate;border-spacing:2px'>"
+    title = (f"<div style='font-weight:600;font-size:12px;color:#374151;margin-bottom:4px'>"
+             f"{calendar.month_name[month]} {year}</div>" if show_title else "")
+    return (title + "<table style='border-collapse:separate;border-spacing:2px'>"
             f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
 
 
 def render_mini_calendar(drive):
-    """Aktueller Monat in der Sidebar: welche Daten je Datum + Link zur Vollansicht."""
+    """Aktueller Monat in der Sidebar: welche Daten je Datum + > zur Jahresansicht."""
     info = _data_by_date(drive)
     today = date.today()
-    st.markdown("##### Daten je Datum")
-    st.markdown(_cal_month_html(today.year, today.month, info), unsafe_allow_html=True)
-    st.caption("Eingefärbte Tage haben Daten (Tooltip: Quote/Channel/Master/Orderlines).")
-    lc, gc = st.columns([5, 1], vertical_alignment="center")
-    if lc.button("Gesamte Kalenderansicht", type="tertiary", key="open_full_cal"):
+    hc1, hc2, hc3 = st.columns([5, 1, 1], vertical_alignment="center")
+    hc1.markdown(f"**{calendar.month_name[today.month]} {today.year}**")
+    if hc2.button(":material/chevron_right:", type="tertiary", key="open_full_cal",
+                  help="Zur Jahresansicht"):
         st.session_state["pricing_panel"] = "calendar"
-    if gc.button(":material/settings:", type="tertiary", key="btn_set", help="Einstellungen anzeigen"):
+    if hc3.button(":material/settings:", type="tertiary", key="btn_set", help="Einstellungen anzeigen"):
         st.session_state["pricing_panel"] = (
             None if st.session_state.get("pricing_panel") == "settings" else "settings")
+    st.markdown(_cal_month_html(today.year, today.month, info, show_title=False),
+                unsafe_allow_html=True)
+    st.markdown(_cal_legend_html(), unsafe_allow_html=True)
 
 
 def render_data_calendar(drive):
@@ -290,7 +313,8 @@ def render_data_calendar(drive):
         return
     jahre = sorted({iso[:4] for iso in info}, reverse=True)
     jahr = int(st.selectbox("Jahr", jahre, index=0, key="cal_year"))
-    st.caption("Eingefärbte Tage haben Daten (Tooltip: Quote/Channel/Master/Orderlines).")
+    st.markdown(_cal_legend_html(), unsafe_allow_html=True)
+    st.caption("Punkte je Tag zeigen die vorhandenen Datenarten; Tooltip mit Details.")
     for row_start in range(1, 13, 4):
         mcols = st.columns(4)
         for i, month in enumerate(range(row_start, min(row_start + 4, 13))):
