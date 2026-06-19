@@ -1264,30 +1264,32 @@ with tab_renner:
                 },
             )
 
-        # ── Ø relative Marge je Preiscluster (gleiche Cluster wie im Vergleich) ──
-        st.markdown("##### Ø relative Marge je Preiscluster")
+        # ── Ø relative Marge je Preisklasse (gleiche Klassen wie CM2-Diagramm) ──
+        st.markdown("##### Ø relative Marge je Preisklasse")
+        mk_edges = [1, 5, 10, 15, 20, 25, 30, 35, 40, 50, 75, 100, float("inf")]
+        mk_labels = ["1–5", "5–10", "10–15", "15–20", "20–25", "25–30",
+                     "30–35", "35–40", "40–50", "50–75", "75–100", ">100"]
         dd = data.copy()
         dd["_m"] = pd.to_numeric(dd["margin"], errors="coerce") * dd["net"]
         pm = dd.groupby("productId").agg(net=("net", "sum"), menge=("quantity", "sum"),
                                          m=("_m", "sum"))
         pm = pm[(pm["menge"] > 0) & (pm["net"] > 0)]
         pm["unit"] = pm["net"] / pm["menge"]
-        pm["Cluster"] = assign_price_cluster(pm["unit"])
-        gmc = pm.groupby("Cluster", observed=False)
+        pm["Preisklasse"] = pd.cut(pm["unit"], bins=mk_edges, labels=mk_labels, right=False)
+        gmc = pm.groupby("Preisklasse", observed=False)
         clm = pd.DataFrame({
             "marge": (gmc["m"].sum() / gmc["net"].sum() * 100).round(1),
             "n": gmc.size().astype(int),
-        }).reindex(PRICE_LABELS).reset_index().rename(columns={"index": "Cluster"})
+        }).reindex(mk_labels).reset_index().rename(columns={"index": "Preisklasse"})
         bars_m = alt.Chart(clm).mark_bar(color="#0D9488").encode(
-            x=alt.X("Cluster:N", sort=PRICE_LABELS, title="Preiscluster (netto/Stück)"),
+            x=alt.X("Preisklasse:N", sort=mk_labels, title="Produktpreis (netto/Stück, €)"),
             y=alt.Y("marge:Q", title="Ø relative Marge (%)"),
-            tooltip=[alt.Tooltip("Cluster:N", title="Cluster"),
+            tooltip=[alt.Tooltip("Preisklasse:N", title="Klasse"),
                      alt.Tooltip("marge:Q", format=".1f", title="Ø Marge %"),
                      alt.Tooltip("n:Q", title="Produkte")],
         )
         st.altair_chart(bars_m, use_container_width=True)
-        st.caption("Umsatzgewichtete relative Marge je Produkt-Preiscluster "
-                   "(Cluster nach Netto-Stückpreis, gleiche Grenzen wie im Vergleich).")
+        st.caption("Umsatzgewichtete relative Marge je Produkt-Preisklasse (Netto-Stückpreis).")
 
     # ── B) Preisänderungs-Wirkung ──────────────────────────────────────────
 with tab_wirkung:
