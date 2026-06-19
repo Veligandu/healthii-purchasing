@@ -557,12 +557,14 @@ def migriere_phoenix_in_unterordner(_drive):
 
 # ─── PDF-Parser ───────────────────────────────────────────────────────────────
 
-# Zeilenmuster: Lagerort  Menge  [Einheit/Name...]  [V-Dat]  Pos  PZN
+# Zeilenmuster: <Lagerort…>  Menge  Packungsgröße  Einheit  …Name…  Pos  PZN
 #               VP_mit_MWSt  EK_ohne_MWSt  Warenwert_ohne_MWSt  CODE  S
-# CODE = Warencode (FA, OA, FO, FE, FAE, … unterschiedlich lang, ggf. mit Leerzeichen);
-#        wir verlangen nach dem Warenwert nur noch einen Großbuchstaben als Bestätigung.
+# Die Anzahl der Lagerort-Zahlen variiert, daher wird die Menge an
+# "<Menge> <Packungsgröße> <EINHEIT>" verankert (Menge = Zahl direkt vor der
+# Packungsgröße, die wiederum direkt vor der Buchstaben-Einheit steht).
 _ZEILEN_RE = re.compile(
-    r"^\s*\d+\s+\d+\s+(\d+)\s+.+?\b(\d{8})\b\s+[\d,]+\s+([\d,]+)\s+([\d,]+)\s+[A-Z]",
+    r"^\s*\d+(?:\s+\d+)*?\s+(\d+)\s+[\dXx.,]+\s+[A-Z]{2,}.+?\b(\d{8})\b"
+    r"\s+[\d,]+\s+([\d,]+)\s+([\d,]+)\s+[A-Z]",
     re.MULTILINE,
 )
 # Rechnungssumme: letzte Zahl vor "DAFUE" in der Summenzeile
