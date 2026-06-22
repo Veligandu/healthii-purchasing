@@ -1281,15 +1281,38 @@ with tab_renner:
             "marge": (gmc["m"].sum() / gmc["net"].sum() * 100).round(1),
             "n": gmc.size().astype(int),
         }).reindex(mk_labels).reset_index().rename(columns={"index": "Preisklasse"})
+        sel_pk = alt.selection_point(fields=["Preisklasse"], name="pk_sel", on="click", clear="dblclick")
         bars_m = alt.Chart(clm).mark_bar(color="#0D9488").encode(
             x=alt.X("Preisklasse:N", sort=mk_labels, title="Produktpreis (netto/Stück, €)"),
             y=alt.Y("marge:Q", title="Ø relative Marge (%)"),
+            opacity=alt.condition(sel_pk, alt.value(1.0), alt.value(0.55)),
             tooltip=[alt.Tooltip("Preisklasse:N", title="Klasse"),
                      alt.Tooltip("marge:Q", format=".1f", title="Ø Marge %"),
                      alt.Tooltip("n:Q", title="Produkte")],
-        )
-        st.altair_chart(bars_m, use_container_width=True)
-        st.caption("Umsatzgewichtete relative Marge je Produkt-Preisklasse (Netto-Stückpreis).")
+        ).add_params(sel_pk)
+        ev_m = st.altair_chart(bars_m, use_container_width=True, on_select="rerun",
+                               key="renner_marge_chart")
+        st.caption("Umsatzgewichtete relative Marge je Produkt-Preisklasse (Netto-Stückpreis). "
+                   "Balken anklicken für die Produkte der Klasse.")
+
+        _picked = (ev_m.selection.get("pk_sel") if ev_m and ev_m.selection else None) or []
+        _klassen = [d.get("Preisklasse") for d in _picked
+                    if isinstance(d, dict) and d.get("Preisklasse")]
+        if _klassen:
+            det = pm[pm["Preisklasse"].astype(str).isin(_klassen)].copy()
+            det["Produkt"] = det.index.map(namen)
+            det["rel"] = (det["m"] / det["net"] * 100).round(1)
+            det = det.reset_index().rename(columns={"productId": "PZN", "menge": "Absatz"})
+            det = det.sort_values("Absatz", ascending=False)
+            st.markdown(f"**Produkte der Klasse {', '.join(_klassen)} € (sortiert nach Absatz)**")
+            st.dataframe(
+                det[["PZN", "Produkt", "rel", "Absatz"]].rename(columns={"rel": "rel. Marge %"}),
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "rel. Marge %": st.column_config.NumberColumn(format="%.1f %%"),
+                    "Absatz": st.column_config.NumberColumn(format="%d"),
+                },
+            )
 
     # ── B) Preisänderungs-Wirkung ──────────────────────────────────────────
 with tab_wirkung:
