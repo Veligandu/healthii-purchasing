@@ -759,25 +759,42 @@ with tab_snap:
                 st.divider()
                 st.markdown("##### Preislogik")
                 plog = plog.copy()
-                plog["_rev"] = pd.to_numeric(plog.get("sales_revenue_net_14d"),
-                                             errors="coerce").fillna(0.0)
                 plog["pricing_category"] = plog["pricing_category"].fillna("—")
-                total = plog["_rev"].sum()
-                if total <= 0:
-                    st.caption("Kein 14-Tage-Umsatz in den Preislogikdaten – "
-                               "keine Umsatzgewichtung möglich.")
+                cat_by_pzn = plog.drop_duplicates("productId").set_index("productId")["pricing_category"]
+
+                # Umsatzbasis: kompletter Orderlines-Umsatz (14 Tage bis Snapshot), inkl. der
+                # Produkte ohne Preislogik; Fallback auf sales_revenue_net_14d aus der Datei.
+                if not ol.empty:
+                    sel_ts = pd.Timestamp(sel)
+                    ol14 = ol[(ol["d"] > sel_ts - pd.Timedelta(days=14)) & (ol["d"] <= sel_ts)]
+                    rev = ol14.groupby("productId")["net"].sum()
+                    basis = (f"Umsatzbasis: kompletter Orderlines-Umsatz 14 Tage bis {fmt_date(sel)} "
+                             "(inkl. Produkte ohne Preislogik).")
+                    residual = "Nicht in Preislogik"
                 else:
-                    cat = (plog.groupby("pricing_category")["_rev"].sum()
-                           .reset_index().sort_values("_rev", ascending=False))
-                    cat["Anteil"] = (cat["_rev"] / total * 100).round(1)
-                    st.markdown("**Umsatzanteil je Preiskategorie** (14-Tage-Umsatz)")
+                    rev = pd.to_numeric(plog.set_index("productId")["sales_revenue_net_14d"],
+                                        errors="coerce").fillna(0.0)
+                    basis = "Umsatzbasis: 14-Tage-Umsatz aus den Preislogikdaten (nur kategorisierte Produkte)."
+                    residual = "—"
+
+                df = rev.rename("rev").reset_index()
+                df["Kategorie"] = df["productId"].map(cat_by_pzn).fillna(residual)
+                total = df["rev"].sum()
+                if total <= 0:
+                    st.caption("Kein Umsatz in der Basis – keine Umsatzgewichtung möglich.")
+                else:
+                    st.caption(basis)
+                    cat = (df.groupby("Kategorie")["rev"].sum().reset_index()
+                           .sort_values("rev", ascending=False))
+                    cat["Anteil"] = (cat["rev"] / total * 100).round(1)
+                    st.markdown("**Umsatzanteil je Preiskategorie**")
                     st.altair_chart(
                         alt.Chart(cat).mark_bar(color="#0D9488").encode(
-                            x=alt.X("pricing_category:N", sort="-y", title="Preiskategorie"),
+                            x=alt.X("Kategorie:N", sort="-y", title="Preiskategorie"),
                             y=alt.Y("Anteil:Q", title="Umsatzanteil %"),
-                            tooltip=[alt.Tooltip("pricing_category:N", title="Kategorie"),
+                            tooltip=[alt.Tooltip("Kategorie:N", title="Kategorie"),
                                      alt.Tooltip("Anteil:Q", format=".1f", title="Anteil %"),
-                                     alt.Tooltip("_rev:Q", format=".0f", title="Umsatz €")],
+                                     alt.Tooltip("rev:Q", format=".0f", title="Umsatz €")],
                         ), use_container_width=True)
 
                     logic_map = {"Quote": "quote_applied_logic",
@@ -786,11 +803,13 @@ with tab_snap:
                                       key="plog_metrik")
                     lcol = logic_map[pa]
                     if lcol in plog.columns:
-                        sub = plog[plog["_rev"] > 0].copy()
+                        sub = plog[["productId", "pricing_category", lcol]].copy()
+                        sub["rev"] = sub["productId"].map(rev).fillna(0.0)
+                        sub = sub[sub["rev"] > 0]
                         sub["Logik"] = sub[lcol].fillna("—")
-                        g2 = sub.groupby(["pricing_category", "Logik"])["_rev"].sum().reset_index()
-                        g2["Anteil"] = (g2["_rev"] /
-                                        g2.groupby("pricing_category")["_rev"].transform("sum") * 100).round(1)
+                        g2 = sub.groupby(["pricing_category", "Logik"])["rev"].sum().reset_index()
+                        g2["Anteil"] = (g2["rev"] /
+                                        g2.groupby("pricing_category")["rev"].transform("sum") * 100).round(1)
                         st.markdown(f"**Je Preiskategorie: Umsatzanteil je angewandter Logik** ({pa})")
                         st.altair_chart(
                             alt.Chart(g2).mark_bar().encode(
@@ -800,8 +819,9 @@ with tab_snap:
                                 tooltip=[alt.Tooltip("pricing_category:N", title="Kategorie"),
                                          alt.Tooltip("Logik:N", title="Logik"),
                                          alt.Tooltip("Anteil:Q", format=".1f", title="Anteil %"),
-                                         alt.Tooltip("_rev:Q", format=".0f", title="Umsatz €")],
+                                         alt.Tooltip("rev:Q", format=".0f", title="Umsatz €")],
                             ), use_container_width=True)
+                        st.caption("Logik-Verteilung nur für kategorisierte Produkte.")
                     else:
                         st.caption(f"Spalte „{lcol}“ nicht in den Preislogikdaten enthalten.")
 
