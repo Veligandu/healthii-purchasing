@@ -515,9 +515,17 @@ if _panel:
         else:
             render_pricing_settings(drive, cfg)
 
-tab_snap, tab_cmp, tab_master, tab_renner, tab_wirkung, tab_produkt = st.tabs(
-    [":material/bar_chart: Momentaufnahme", ":material/compare_arrows: Vergleich", ":material/folder_open: Masterdatei-Analyse", ":material/leaderboard: Rennerliste", ":material/insights: Preisänderungs-Wirkung", ":material/search: Produktansicht"]
+tab_snap, tab_cmp, tab_master, tab_renner, tab_produkt = st.tabs(
+    [":material/bar_chart: Momentaufnahme", ":material/compare_arrows: Vergleich", ":material/folder_open: Masterdatei-Analyse", ":material/leaderboard: Rennerliste", ":material/search: Produktansicht"]
 )
+
+# Orderlines einmal vorbereiten (von Vergleich, Rennerliste genutzt)
+ol = load_orderlines(drive)
+if not ol.empty:
+    ol = ol.copy()
+    ol["ref"] = ol["source"].map(lambda s: ref_for_source(s, source_map))
+    ol = ol[ol["d"].notna()]
+    namen = ol.groupby("productId")["productname"].first()
 
 # ════════════════════════════════════════════════════════════════════════════════
 # TAB 1 – Momentaufnahme (ein Zeitpunkt)
@@ -998,6 +1006,127 @@ with tab_cmp:
                         f"von {len(mat):,} PZN über {mat.shape[1]} Zeitpunkte.".replace(',', '.')
                     )
 
+            # ── Preisänderungs-Wirkung (nutzt Von/Bis des Vergleichs) ──
+            st.divider()
+            st.markdown("### :material/insights: Preisänderungs-Wirkung")
+            if ol.empty:
+                st.info("Für die Preisänderungs-Wirkung werden Orderlines benötigt "
+                        "(Upload links in der Seitenleiste).")
+            elif von >= bis:
+                st.caption("Für die Wirkungsanalyse bitte „Von“ vor „Bis“ wählen.")
+            else:
+                wc1, wc2 = st.columns(2)
+                pth = wc1.slider("Min. Preisänderung %", 0, 50, 5, key="ab_pth")
+                qth = wc2.slider("Min. Mengenänderung %", 0, 90, 30, key="ab_qth")
+
+                pv = pl.price_table(load_snapshot(drive, von)).rename(columns={"price": "preis_vorher"})
+                pb = pl.price_table(load_snapshot(drive, bis)).rename(columns={"price": "preis_nachher"})
+                preise = pv.merge(pb, on=["productId", "ref"], how="inner")
+                preise = preise[preise["preis_vorher"] > 0].copy()
+                preise["preis_pct"] = ((preise["preis_nachher"] - preise["preis_vorher"])
+                                       / preise["preis_vorher"] * 100)
+
+                one = pd.Timedelta(days=1)
+                von_d, bis_d = pd.Timestamp(von), pd.Timestamp(bis)
+                first, last = ol["d"].min(), ol["d"].max()
+                before = ol[(ol["d"] >= von_d) & (ol["d"] < bis_d)]
+                after = ol[ol["d"] >= bis_d]
+                before_days = max(1, (min(bis_d, last + one) - max(von_d, first)).days)
+                after_days = max(1, (last + one - max(bis_d, first)).days)
+
+                def grp(d):
+                    return d.groupby(["productId", "ref"]).agg(
+                        menge=("quantity", "sum"), net=("net", "sum")).reset_index()
+
+                both = grp(before).merge(grp(after), on=["productId", "ref"],
+                                         how="outer", suffixes=("_v", "_n")).fillna(0)
+                both = both[both["menge_v"] > 0].copy()
+                both["vor_rate"] = both["menge_v"] / before_days
+                both["nach_rate"] = both["menge_n"] / after_days
+                both["qty_pct"] = (both["nach_rate"] - both["vor_rate"]) / both["vor_rate"] * 100
+                both["eppu"] = both["net_v"] / both["menge_v"]
+                both["lost_units"] = (both["vor_rate"] - both["nach_rate"]).clip(lower=0) * after_days
+                both["gained_units"] = (both["nach_rate"] - both["vor_rate"]).clip(lower=0) * after_days
+                both["lost_net"] = both["lost_units"] * both["eppu"]
+                both["gained_net"] = both["gained_units"] * both["eppu"]
+
+                res = both.merge(preise[["productId", "ref", "preis_vorher", "preis_nachher", "preis_pct"]],
+                                 on=["productId", "ref"], how="inner")
+                res["Produkt"] = res["productId"].map(namen)
+
+                st.caption(
+                    f"Fenster: vorher {before_days} Tage (ab {fmt_date(von)}) · "
+                    f"nachher {after_days} Tage (ab {fmt_date(bis)}). Mengen als Ø/Tag normiert."
+                )
+
+                def render_wirkung(verlust):
+                    if verlust:
+                        sig = res[(res["preis_pct"] >= pth) & (res["qty_pct"] <= -qth)].copy()
+                        eff_units, eff_net = "lost_units", "lost_net"
+                        lbl_units, lbl_net = "Verlust Stk.", "Verlust € (netto)"
+                        kpi_units, kpi_net = "Verlorene Einheiten (gesch.)", "Verlorener Umsatz (gesch.)"
+                        titel = ":red[:material/trending_down:] Verluste – Preiserhöhung → Mengenrückgang"
+                        leer = "Keine signifikanten Abverkaufsverluste durch Preiserhöhungen für diese Auswahl."
+                        tag = "verluste"
+                    else:
+                        sig = res[(res["preis_pct"] <= -pth) & (res["qty_pct"] >= qth)].copy()
+                        eff_units, eff_net = "gained_units", "gained_net"
+                        lbl_units, lbl_net = "Mehrabsatz Stk.", "Mehrumsatz € (netto)"
+                        kpi_units, kpi_net = "Gewonnene Einheiten (gesch.)", "Mehrumsatz (gesch.)"
+                        titel = ":green[:material/trending_up:] Gewinne – Preissenkung → Mengenzuwachs"
+                        leer = "Keine signifikanten Mengenzuwächse durch Preissenkungen für diese Auswahl."
+                        tag = "gewinne"
+
+                    st.markdown(f"##### {titel}")
+                    sig = sig.sort_values(eff_net, ascending=False)
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("Betroffene Produkte/Reihen", f"{len(sig):,}".replace(",", "."))
+                    m2.metric(kpi_units, f"{int(sig[eff_units].sum()):,}".replace(",", "."))
+                    m3.metric(kpi_net, f"{sig[eff_net].sum():,.0f} €".replace(",", "."))
+
+                    if sig.empty:
+                        st.info(leer)
+                        return
+                    out = sig[["productId", "Produkt", "ref", "preis_vorher", "preis_nachher",
+                               "preis_pct", "vor_rate", "nach_rate", "qty_pct", eff_units, eff_net]].copy()
+                    out["ref"] = out["ref"].map(lambda r: ref_label(r, cfg))
+                    for c in ["preis_vorher", "preis_nachher", "vor_rate", "nach_rate", eff_net]:
+                        out[c] = out[c].round(2)
+                    out["preis_pct"] = out["preis_pct"].round(1)
+                    out["qty_pct"] = out["qty_pct"].round(1)
+                    out[eff_units] = out[eff_units].round(0).astype(int)
+                    out = out.rename(columns={
+                        "productId": "PZN", "ref": "Preisreihe",
+                        "preis_vorher": "Preis vorher", "preis_nachher": "Preis nachher",
+                        "preis_pct": "Preis Δ%", "vor_rate": "Menge/Tag vorher",
+                        "nach_rate": "Menge/Tag nachher", "qty_pct": "Menge Δ%",
+                        eff_units: lbl_units, eff_net: lbl_net,
+                    })
+                    st.dataframe(
+                        out, use_container_width=True, hide_index=True,
+                        column_config={
+                            "Preis vorher": st.column_config.NumberColumn(format="%.2f €"),
+                            "Preis nachher": st.column_config.NumberColumn(format="%.2f €"),
+                            "Preis Δ%": st.column_config.NumberColumn(format="%.1f %%"),
+                            "Menge/Tag vorher": st.column_config.NumberColumn(format="%.2f"),
+                            "Menge/Tag nachher": st.column_config.NumberColumn(format="%.2f"),
+                            "Menge Δ%": st.column_config.NumberColumn(format="%.1f %%"),
+                            lbl_units: st.column_config.NumberColumn(format="%d"),
+                            lbl_net: st.column_config.NumberColumn(format="%.2f €"),
+                        },
+                    )
+                    buf = io.BytesIO()
+                    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+                        out.to_excel(w, index=False, sheet_name="Preiswirkung")
+                    st.download_button(
+                        ":material/download: Als Excel", data=buf.getvalue(),
+                        file_name=f"preiswirkung_{tag}_{von}_{bis}.xlsx", key=f"ab_dl_{tag}",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+                render_wirkung(True)
+                st.divider()
+                render_wirkung(False)
+
 # ════════════════════════════════════════════════════════════════════════════════
 # TAB 3 – Masterdatei-Analyse (Abgleich Master-Channelpreise vs. Channel-Snapshot)
 # ════════════════════════════════════════════════════════════════════════════════
@@ -1130,17 +1259,8 @@ with tab_master:
                 )
 
 # ════════════════════════════════════════════════════════════════════════════════
-# TAB 4 – Abverkauf (Orderlines)
+# TAB 4 – Rennerliste (Orderlines)
 # ════════════════════════════════════════════════════════════════════════════════
-ol = load_orderlines(drive)
-if not ol.empty:
-    ol = ol.copy()
-    ol["ref"] = ol["source"].map(lambda s: ref_for_source(s, source_map))
-    ol = ol[ol["d"].notna()]
-    namen = ol.groupby("productId")["productname"].first()
-
-
-# ── A) Rennerliste je Channel (nach Umsatz) ────────────────────────────────
 with tab_renner:
     if ol.empty:
         st.info("Noch keine Orderlines vorhanden. Bitte links in der Seitenleiste hochladen.")
@@ -1313,143 +1433,6 @@ with tab_renner:
                     "Absatz": st.column_config.NumberColumn(format="%d"),
                 },
             )
-
-    # ── B) Preisänderungs-Wirkung ──────────────────────────────────────────
-with tab_wirkung:
-    if ol.empty:
-        st.info("Noch keine Orderlines vorhanden. Bitte links in der Seitenleiste hochladen.")
-    else:
-        snaps = list_snapshots(drive)
-        price_snaps = [k for k, v in snaps.items() if v.get("quote_id") or v.get("channel_id")]
-        if len(price_snaps) < 2:
-            st.info("Für die Preisänderungs-Wirkung werden mindestens zwei Preis-Snapshots benötigt.")
-        else:
-            c1, c2, c3, c4 = st.columns(4)
-            with c1:
-                von = st.selectbox("Preis vorher", price_snaps, index=len(price_snaps) - 2,
-                                   format_func=fmt_date, key="ab_von")
-            with c2:
-                bis = st.selectbox("Preis nachher", price_snaps, index=len(price_snaps) - 1,
-                                   format_func=fmt_date, key="ab_bis")
-            with c3:
-                pth = st.slider("Min. Preisänderung %", 0, 50, 5, key="ab_pth")
-            with c4:
-                qth = st.slider("Min. Mengenänderung %", 0, 90, 30, key="ab_qth")
-
-            if von >= bis:
-                st.warning("„Preis vorher“ muss vor „Preis nachher“ liegen.")
-            else:
-                # Preisreihen je Produkt zu beiden Zeitpunkten (Quote + Channel 1–3)
-                pv = pl.price_table(load_snapshot(drive, von)).rename(columns={"price": "preis_vorher"})
-                pb = pl.price_table(load_snapshot(drive, bis)).rename(columns={"price": "preis_nachher"})
-                preise = pv.merge(pb, on=["productId", "ref"], how="inner")
-                preise = preise[preise["preis_vorher"] > 0].copy()
-                preise["preis_pct"] = ((preise["preis_nachher"] - preise["preis_vorher"])
-                                       / preise["preis_vorher"] * 100)
-
-                # Verkaufsfenster: vor vs. nach dem Datum „bis", normiert auf Ø/Tag
-                one = pd.Timedelta(days=1)
-                von_d, bis_d = pd.Timestamp(von), pd.Timestamp(bis)
-                first, last = ol["d"].min(), ol["d"].max()
-                before = ol[(ol["d"] >= von_d) & (ol["d"] < bis_d)]
-                after = ol[ol["d"] >= bis_d]
-                before_days = max(1, (min(bis_d, last + one) - max(von_d, first)).days)
-                after_days = max(1, (last + one - max(bis_d, first)).days)
-
-                def grp(d):
-                    return d.groupby(["productId", "ref"]).agg(
-                        menge=("quantity", "sum"), net=("net", "sum")).reset_index()
-
-                both = grp(before).merge(grp(after), on=["productId", "ref"],
-                                         how="outer", suffixes=("_v", "_n")).fillna(0)
-                both = both[both["menge_v"] > 0].copy()  # nur Produkte mit Verkäufen vorher
-                both["vor_rate"] = both["menge_v"] / before_days
-                both["nach_rate"] = both["menge_n"] / after_days
-                both["qty_pct"] = (both["nach_rate"] - both["vor_rate"]) / both["vor_rate"] * 100
-                both["eppu"] = both["net_v"] / both["menge_v"]
-                # Effekt-Einheiten je Richtung (geschätzt über after_days)
-                both["lost_units"] = (both["vor_rate"] - both["nach_rate"]).clip(lower=0) * after_days
-                both["gained_units"] = (both["nach_rate"] - both["vor_rate"]).clip(lower=0) * after_days
-                both["lost_net"] = both["lost_units"] * both["eppu"]
-                both["gained_net"] = both["gained_units"] * both["eppu"]
-
-                res = both.merge(preise[["productId", "ref", "preis_vorher", "preis_nachher", "preis_pct"]],
-                                 on=["productId", "ref"], how="inner")
-                res["Produkt"] = res["productId"].map(namen)
-
-                st.caption(
-                    f"Fenster: vorher {before_days} Tage (ab {fmt_date(von)}) · "
-                    f"nachher {after_days} Tage (ab {fmt_date(bis)}). "
-                    "Mengen als Ø/Tag normiert."
-                )
-
-                def render_wirkung(verlust):
-                    if verlust:
-                        sig = res[(res["preis_pct"] >= pth) & (res["qty_pct"] <= -qth)].copy()
-                        eff_units, eff_net = "lost_units", "lost_net"
-                        lbl_units, lbl_net = "Verlust Stk.", "Verlust € (netto)"
-                        kpi_units, kpi_net = "Verlorene Einheiten (gesch.)", "Verlorener Umsatz (gesch.)"
-                        titel = ":red[:material/trending_down:] Verluste – Preiserhöhung → Mengenrückgang"
-                        leer = "Keine signifikanten Abverkaufsverluste durch Preiserhöhungen für diese Auswahl."
-                        tag = "verluste"
-                    else:
-                        sig = res[(res["preis_pct"] <= -pth) & (res["qty_pct"] >= qth)].copy()
-                        eff_units, eff_net = "gained_units", "gained_net"
-                        lbl_units, lbl_net = "Mehrabsatz Stk.", "Mehrumsatz € (netto)"
-                        kpi_units, kpi_net = "Gewonnene Einheiten (gesch.)", "Mehrumsatz (gesch.)"
-                        titel = ":green[:material/trending_up:] Gewinne – Preissenkung → Mengenzuwachs"
-                        leer = "Keine signifikanten Mengenzuwächse durch Preissenkungen für diese Auswahl."
-                        tag = "gewinne"
-
-                    st.markdown(f"##### {titel}")
-                    sig = sig.sort_values(eff_net, ascending=False)
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("Betroffene Produkte/Reihen", f"{len(sig):,}".replace(",", "."))
-                    m2.metric(kpi_units, f"{int(sig[eff_units].sum()):,}".replace(",", "."))
-                    m3.metric(kpi_net, f"{sig[eff_net].sum():,.0f} €".replace(",", "."))
-
-                    if sig.empty:
-                        st.info(leer)
-                        return
-                    out = sig[["productId", "Produkt", "ref", "preis_vorher", "preis_nachher",
-                               "preis_pct", "vor_rate", "nach_rate", "qty_pct", eff_units, eff_net]].copy()
-                    out["ref"] = out["ref"].map(lambda r: ref_label(r, cfg))
-                    for c in ["preis_vorher", "preis_nachher", "vor_rate", "nach_rate", eff_net]:
-                        out[c] = out[c].round(2)
-                    out["preis_pct"] = out["preis_pct"].round(1)
-                    out["qty_pct"] = out["qty_pct"].round(1)
-                    out[eff_units] = out[eff_units].round(0).astype(int)
-                    out = out.rename(columns={
-                        "productId": "PZN", "ref": "Preisreihe",
-                        "preis_vorher": "Preis vorher", "preis_nachher": "Preis nachher",
-                        "preis_pct": "Preis Δ%", "vor_rate": "Menge/Tag vorher",
-                        "nach_rate": "Menge/Tag nachher", "qty_pct": "Menge Δ%",
-                        eff_units: lbl_units, eff_net: lbl_net,
-                    })
-                    st.dataframe(
-                        out, use_container_width=True, hide_index=True,
-                        column_config={
-                            "Preis vorher": st.column_config.NumberColumn(format="%.2f €"),
-                            "Preis nachher": st.column_config.NumberColumn(format="%.2f €"),
-                            "Preis Δ%": st.column_config.NumberColumn(format="%.1f %%"),
-                            "Menge/Tag vorher": st.column_config.NumberColumn(format="%.2f"),
-                            "Menge/Tag nachher": st.column_config.NumberColumn(format="%.2f"),
-                            "Menge Δ%": st.column_config.NumberColumn(format="%.1f %%"),
-                            lbl_units: st.column_config.NumberColumn(format="%d"),
-                            lbl_net: st.column_config.NumberColumn(format="%.2f €"),
-                        },
-                    )
-                    buf = io.BytesIO()
-                    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-                        out.to_excel(w, index=False, sheet_name="Preiswirkung")
-                    st.download_button(
-                        ":material/download: Als Excel", data=buf.getvalue(),
-                        file_name=f"abverkauf_preiswirkung_{tag}_{von}_{bis}.xlsx", key=f"ab_dl_{tag}",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-                render_wirkung(True)
-                st.divider()
-                render_wirkung(False)
 
 
 # ════════════════════════════════════════════════════════════════════════════════
