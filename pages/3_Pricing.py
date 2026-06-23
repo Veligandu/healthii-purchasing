@@ -787,11 +787,17 @@ with tab_snap:
                     cat = (df.groupby("Kategorie")["rev"].sum().reset_index()
                            .sort_values("rev", ascending=False))
                     cat["Anteil"] = (cat["rev"] / total * 100).round(1)
+                    # echte Kategorien nach Umsatz, Residual immer ganz rechts
+                    cat_order = [c for c in cat["Kategorie"] if c != residual]
+                    if residual in set(cat["Kategorie"]):
+                        cat_order = cat_order + [residual]
                     st.markdown("**Umsatzanteil je Preiskategorie**")
                     st.altair_chart(
-                        alt.Chart(cat).mark_bar(color="#0D9488").encode(
-                            x=alt.X("Kategorie:N", sort="-y", title="Preiskategorie"),
+                        alt.Chart(cat).mark_bar().encode(
+                            x=alt.X("Kategorie:N", sort=cat_order, title="Preiskategorie"),
                             y=alt.Y("Anteil:Q", title="Umsatzanteil %"),
+                            color=alt.condition(f"datum.Kategorie === '{residual}'",
+                                                alt.value("#9CA3AF"), alt.value("#0D9488")),
                             tooltip=[alt.Tooltip("Kategorie:N", title="Kategorie"),
                                      alt.Tooltip("Anteil:Q", format=".1f", title="Anteil %"),
                                      alt.Tooltip("rev:Q", format=".0f", title="Umsatz €")],
