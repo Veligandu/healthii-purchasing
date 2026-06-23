@@ -38,7 +38,7 @@ ORDERLINES_COLS = ["productId", "productname", "type", "source", "order_id", "da
                    "quantity", "net", "tax", "ek", "margin"]
 
 # CM2-Parameter
-CM2_OPEX = 0.04            # variable Operationskosten (Anteil vom Netto)
+CM2_OPEX_FIX = 1.60        # variable Operationskosten je Warenkorb (fix, €)
 CM2_PAYMENT = 0.02         # Payment (Anteil vom Netto)
 CM2_FRACHT = 4.0           # Verpackung & Versand je Warenkorb (€)
 CM2_KLEIN_GEBUEHR = 2.44   # erhobene Versandgebühr bei Warenkörben < Schwelle (€)
@@ -320,7 +320,7 @@ def load_orderlines(drive) -> pd.DataFrame:
 def basket_cm2(orderlines: pd.DataFrame) -> pd.Series:
     """CM2 je Warenkorb (order_id) aus Orderline-Zeilen.
 
-    CM2 = Rohmarge € − (Opex+Payment) × Netto − Fracht
+    CM2 = Rohmarge € − Payment × Netto − Opex (fix je Warenkorb) − Fracht
           + Versandgebühr, falls Brutto-Warenkorbwert (Netto+Steuer) < Schwelle.
     Rückgabe: Series order_id → cm2 (€).
     """
@@ -331,7 +331,7 @@ def basket_cm2(orderlines: pd.DataFrame) -> pd.Series:
     g = df.groupby("order_id").agg(
         net=("net", "sum"), tax=("tax", "sum"), marge=("_marge", "sum"))
     brutto = g["net"] + g["tax"].fillna(0.0)
-    cm2 = g["marge"] - (CM2_OPEX + CM2_PAYMENT) * g["net"] - CM2_FRACHT
+    cm2 = g["marge"] - CM2_PAYMENT * g["net"] - CM2_OPEX_FIX - CM2_FRACHT
     cm2 = cm2 + (brutto < CM2_KLEIN_SCHWELLE).astype(float) * CM2_KLEIN_GEBUEHR
     return cm2
 

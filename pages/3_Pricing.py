@@ -1359,7 +1359,8 @@ with tab_renner:
                 "Ø CM2 / Warenkorb": st.column_config.NumberColumn(
                     format="%.2f €",
                     help="Durchschnittlicher Warenkorb-CM2 der Warenkörbe im gewählten Zeitraum, "
-                         "die dieses Produkt enthalten. CM2 = Rohmarge € − 6 % × Netto − 4 €."),
+                         "die dieses Produkt enthalten. CM2 = Rohmarge € − 1,60 € Opex (fix) "
+                         "− 2 % × Netto − 4 € Fracht (+2,44 € Versandgebühr bei Brutto < 25 €)."),
             },
         )
         buf = io.BytesIO()
@@ -1580,8 +1581,8 @@ def render_produktansicht():
                         basket["cm2"] = pl.basket_cm2(sub)
 
                         cm2_hilfe = (
-                            "CM2 je Warenkorb = Rohmarge € − (4 % variable Operationskosten + 2 % Payment) "
-                            "× Netto-Warenkorbwert − 4 € (Verpackung & Versand); "
+                            "CM2 je Warenkorb = Rohmarge € − 1,60 € variable Operationskosten (fix je Warenkorb) "
+                            "− 2 % Payment × Netto-Warenkorbwert − 4 € (Verpackung & Versand); "
                             "+ 2,44 € Versandgebühr, wenn der Brutto-Warenkorbwert (Netto+MwSt) < 25 € ist. "
                             "Rohmarge € = Σ Marge × Netto je Artikel. "
                             "Der KPI ist der Durchschnitt über alle Warenkörbe mit diesem Produkt."
