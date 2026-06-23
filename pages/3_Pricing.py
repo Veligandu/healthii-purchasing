@@ -164,8 +164,8 @@ from pricing_lib import (
     CHANNEL_COLS, MASTER_CHANNEL_COLS, PRICE_EDGES, PRICE_LABELS,
     REF_QUOTE, QUOTE_LABEL,
     parse_date_from_filename, parse_quote_bytes, parse_channel_bytes,
-    parse_master_bytes, parse_orderlines_bytes, ref_for_source, ref_label,
-    channel_label_list, assign_price_cluster, fmt_date,
+    parse_master_bytes, parse_orderlines_bytes, parse_pricelogic_bytes,
+    ref_for_source, ref_label, channel_label_list, assign_price_cluster, fmt_date,
 )
 
 # Veränderungs-Cluster (prozentuale Preisänderung zwischen zwei Zeitpunkten)
@@ -205,6 +205,10 @@ def load_master(_drive, iso_datum: str):
 @st.cache_data(ttl=60, show_spinner="Channel-Preise werden geladen …")
 def load_channel(_drive, iso_datum: str):
     return pl.load_channel(_drive, iso_datum)
+
+@st.cache_data(ttl=60, show_spinner="Preislogik wird geladen …")
+def load_pricelogic(_drive, iso_datum: str):
+    return pl.load_pricelogic(_drive, iso_datum)
 
 @st.cache_data(ttl=60, show_spinner="Orderlines werden geladen …")
 def load_orderlines(_drive):
@@ -437,7 +441,10 @@ with st.sidebar:
         help="Anhängen: vorhandene Tage bleiben unverändert. "
              "Ersetzen: für Tage in der neuen Datei werden alte Zeilen überschrieben.",
     )
-
+    pricelogic_file = st.file_uploader(
+        "Preislogikdaten (CSV)", type=["csv"], key="up_pricelogic",
+        help="Pro PZN: berechnete Preise, angewandte Logik, Preiskategorie. "
+             "Wird dem oben gewählten Snapshot-Datum zugeordnet (Daten sind oft vom Vortag).")
 
     # Vorschau
     if quote_file is not None:
@@ -469,10 +476,17 @@ with st.sidebar:
                        f"({ol_new['date'].min()} – {ol_new['date'].max()})".replace(",", "."))
         except Exception as e:
             st.error(f"Orderlines nicht lesbar: {e}")
+    pl_new = None
+    if pricelogic_file is not None:
+        try:
+            pl_new = parse_pricelogic_bytes(pricelogic_file.getvalue())
+            st.success(f"Preislogik: {len(pl_new):,} PZN".replace(",", "."))
+        except Exception as e:
+            st.error(f"Preislogik nicht lesbar: {e}")
 
     if st.button(":material/save: In Drive speichern", type="primary", use_container_width=True,
-                 disabled=(quote_file is None and channel_file is None
-                           and master_file is None and orderlines_file is None)):
+                 disabled=(quote_file is None and channel_file is None and master_file is None
+                           and orderlines_file is None and pricelogic_file is None)):
         folder_id = get_pricing_folder_id(drive)
         ddmmyy = snap_datum.strftime("%d%m%y")
         gespeichert = []
@@ -493,6 +507,11 @@ with st.sidebar:
                                   pl.ORDERLINES_FILE, folder_id, "text/csv")
             load_orderlines.clear()
             gespeichert.append(f"Orderlines ({len(combined):,} ges.)".replace(",", "."))
+        if pricelogic_file is not None and pl_new is not None:
+            upload_bytes_to_drive(drive, pl_new.to_csv(index=False).encode("utf-8"),
+                                  f"pricelogic_{ddmmyy}.csv", folder_id, "text/csv")
+            load_pricelogic.clear()
+            gespeichert.append("Preislogik")
         list_snapshots.clear()
         load_snapshot.clear()
         st.success(f"Gespeichert: {', '.join(gespeichert)}")
@@ -733,6 +752,58 @@ with tab_snap:
                     file_name=f"kritische_preise_{sel}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
+
+            # ── Preislogik (umsatzgewichtete Verteilungen) ──
+            plog = load_pricelogic(drive, sel)
+            if not plog.empty:
+                st.divider()
+                st.markdown("##### Preislogik")
+                plog = plog.copy()
+                plog["_rev"] = pd.to_numeric(plog.get("sales_revenue_net_14d"),
+                                             errors="coerce").fillna(0.0)
+                plog["pricing_category"] = plog["pricing_category"].fillna("—")
+                total = plog["_rev"].sum()
+                if total <= 0:
+                    st.caption("Kein 14-Tage-Umsatz in den Preislogikdaten – "
+                               "keine Umsatzgewichtung möglich.")
+                else:
+                    cat = (plog.groupby("pricing_category")["_rev"].sum()
+                           .reset_index().sort_values("_rev", ascending=False))
+                    cat["Anteil"] = (cat["_rev"] / total * 100).round(1)
+                    st.markdown("**Umsatzanteil je Preiskategorie** (14-Tage-Umsatz)")
+                    st.altair_chart(
+                        alt.Chart(cat).mark_bar(color="#0D9488").encode(
+                            x=alt.X("pricing_category:N", sort="-y", title="Preiskategorie"),
+                            y=alt.Y("Anteil:Q", title="Umsatzanteil %"),
+                            tooltip=[alt.Tooltip("pricing_category:N", title="Kategorie"),
+                                     alt.Tooltip("Anteil:Q", format=".1f", title="Anteil %"),
+                                     alt.Tooltip("_rev:Q", format=".0f", title="Umsatz €")],
+                        ), use_container_width=True)
+
+                    logic_map = {"Quote": "quote_applied_logic",
+                                 **{lbl: f"cp{i + 1}_applied_logic" for i, lbl in enumerate(CH_LABELS)}}
+                    pa = st.selectbox("Preisart (angewandte Logik)", list(logic_map.keys()),
+                                      key="plog_metrik")
+                    lcol = logic_map[pa]
+                    if lcol in plog.columns:
+                        sub = plog[plog["_rev"] > 0].copy()
+                        sub["Logik"] = sub[lcol].fillna("—")
+                        g2 = sub.groupby(["pricing_category", "Logik"])["_rev"].sum().reset_index()
+                        g2["Anteil"] = (g2["_rev"] /
+                                        g2.groupby("pricing_category")["_rev"].transform("sum") * 100).round(1)
+                        st.markdown(f"**Je Preiskategorie: Umsatzanteil je angewandter Logik** ({pa})")
+                        st.altair_chart(
+                            alt.Chart(g2).mark_bar().encode(
+                                x=alt.X("pricing_category:N", title="Preiskategorie"),
+                                y=alt.Y("Anteil:Q", title="Umsatzanteil %", stack="zero"),
+                                color=alt.Color("Logik:N", title="Angewandte Logik"),
+                                tooltip=[alt.Tooltip("pricing_category:N", title="Kategorie"),
+                                         alt.Tooltip("Logik:N", title="Logik"),
+                                         alt.Tooltip("Anteil:Q", format=".1f", title="Anteil %"),
+                                         alt.Tooltip("_rev:Q", format=".0f", title="Umsatz €")],
+                            ), use_container_width=True)
+                    else:
+                        st.caption(f"Spalte „{lcol}“ nicht in den Preislogikdaten enthalten.")
 
             # ── Report zu dieser Momentaufnahme ────────────────────────────────
             st.divider()

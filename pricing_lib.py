@@ -189,7 +189,8 @@ def list_snapshots(drive):
     snaps = {}
     for f in res.get("files", []):
         name = f["name"].lower()
-        kind = ("quote_id" if name.startswith("quote") else
+        kind = ("pricelogic_id" if name.startswith("pricelogic") else
+                "quote_id" if name.startswith("quote") else
                 "channel_id" if name.startswith("channel") else
                 "master_id" if name.startswith("master") else None)
         if kind is None:  # report_/config/orderlines etc. erzeugen keinen Snapshot
@@ -197,8 +198,8 @@ def list_snapshots(drive):
         d = parse_date_from_filename(f["name"])
         if d is None:
             continue
-        entry = snaps.setdefault(d.isoformat(),
-                                 {"quote_id": None, "channel_id": None, "master_id": None})
+        entry = snaps.setdefault(d.isoformat(), {
+            "quote_id": None, "channel_id": None, "master_id": None, "pricelogic_id": None})
         entry[kind] = f["id"]
     return dict(sorted(snaps.items()))
 
@@ -243,6 +244,32 @@ def load_master(drive, iso_datum: str) -> pd.DataFrame:
     if not entry or not entry["master_id"]:
         return pd.DataFrame()
     return read_master_csv(download_bytes(drive, entry["master_id"]))
+
+
+# ─── Preislogikdaten ─────────────────────────────────────────────────────────────
+
+# angewandte Logik je Preisart (Spaltenname in der Preislogik-Datei)
+PRICELOGIC_LOGIC_COLS = ["quote_applied_logic", "cp1_applied_logic", "cp2_applied_logic",
+                         "cp3_applied_logic", "cp4_applied_logic", "cp5_applied_logic"]
+
+
+def parse_pricelogic_bytes(data: bytes) -> pd.DataFrame:
+    """Roher Preislogik-Export → DataFrame (Spalte `pzn` → `productId`, als String)."""
+    df = pd.read_csv(io.BytesIO(data), dtype={"pzn": str})
+    df.columns = df.columns.str.strip()
+    df = df.rename(columns={"pzn": "productId"})
+    df = df[df["productId"].notna()]
+    return df.reset_index(drop=True)
+
+
+def load_pricelogic(drive, iso_datum: str) -> pd.DataFrame:
+    """Preislogikdaten eines Zeitpunkts (oder leer)."""
+    snaps = list_snapshots(drive)
+    entry = snaps.get(iso_datum)
+    if not entry or not entry.get("pricelogic_id"):
+        return pd.DataFrame()
+    return pd.read_csv(io.BytesIO(download_bytes(drive, entry["pricelogic_id"])),
+                       dtype={"productId": str})
 
 
 # ─── Orderlines (Abverkauf) ──────────────────────────────────────────────────────
