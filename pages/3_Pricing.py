@@ -1045,34 +1045,39 @@ with tab_cmp:
                 both["nach_rate"] = both["menge_n"] / after_days
                 both["qty_pct"] = (both["nach_rate"] - both["vor_rate"]) / both["vor_rate"] * 100
                 both["eppu"] = both["net_v"] / both["menge_v"]
-                both["lost_units"] = (both["vor_rate"] - both["nach_rate"]).clip(lower=0) * after_days
-                both["gained_units"] = (both["nach_rate"] - both["vor_rate"]).clip(lower=0) * after_days
+                both["lost_units"] = (both["vor_rate"] - both["nach_rate"]).clip(lower=0)
+                both["gained_units"] = (both["nach_rate"] - both["vor_rate"]).clip(lower=0)
                 both["lost_net"] = both["lost_units"] * both["eppu"]
                 both["gained_net"] = both["gained_units"] * both["eppu"]
 
                 res = both.merge(preise[["productId", "ref", "preis_vorher", "preis_nachher", "preis_pct"]],
                                  on=["productId", "ref"], how="inner")
                 res["Produkt"] = res["productId"].map(namen)
+                # Nur die oben gewählte Preisart betrachten (außer „Alle")
+                if metrik != "Alle":
+                    res = res[res["ref"] == col_map[metrik]]
 
+                _reihe_hinweis = "alle Preisreihen" if metrik == "Alle" else f"Preisreihe „{metrik}“"
                 st.caption(
-                    f"Fenster: vorher {before_days} Tage (ab {fmt_date(von)}) · "
-                    f"nachher {after_days} Tage (ab {fmt_date(bis)}). Mengen als Ø/Tag normiert."
+                    f"{_reihe_hinweis} · Fenster: vorher {before_days} Tage (ab {fmt_date(von)}) · "
+                    f"nachher {after_days} Tage (ab {fmt_date(bis)}). "
+                    "Effekte als geschätzter Verlust/Gewinn **pro Tag** (Ø nachher vs. vorher)."
                 )
 
                 def render_wirkung(verlust):
                     if verlust:
                         sig = res[(res["preis_pct"] >= pth) & (res["qty_pct"] <= -qth)].copy()
                         eff_units, eff_net = "lost_units", "lost_net"
-                        lbl_units, lbl_net = "Verlust Stk.", "Verlust € (netto)"
-                        kpi_units, kpi_net = "Verlorene Einheiten (gesch.)", "Verlorener Umsatz (gesch.)"
+                        lbl_units, lbl_net = "Verlust Stk./Tag", "Verlust €/Tag (netto)"
+                        kpi_units, kpi_net = "Verlorene Einheiten/Tag", "Verlorener Umsatz/Tag"
                         titel = ":red[:material/trending_down:] Verluste – Preiserhöhung → Mengenrückgang"
                         leer = "Keine signifikanten Abverkaufsverluste durch Preiserhöhungen für diese Auswahl."
                         tag = "verluste"
                     else:
                         sig = res[(res["preis_pct"] <= -pth) & (res["qty_pct"] >= qth)].copy()
                         eff_units, eff_net = "gained_units", "gained_net"
-                        lbl_units, lbl_net = "Mehrabsatz Stk.", "Mehrumsatz € (netto)"
-                        kpi_units, kpi_net = "Gewonnene Einheiten (gesch.)", "Mehrumsatz (gesch.)"
+                        lbl_units, lbl_net = "Mehrabsatz Stk./Tag", "Mehrumsatz €/Tag (netto)"
+                        kpi_units, kpi_net = "Gewonnene Einheiten/Tag", "Mehrumsatz/Tag"
                         titel = ":green[:material/trending_up:] Gewinne – Preissenkung → Mengenzuwachs"
                         leer = "Keine signifikanten Mengenzuwächse durch Preissenkungen für diese Auswahl."
                         tag = "gewinne"
@@ -1081,7 +1086,7 @@ with tab_cmp:
                     sig = sig.sort_values(eff_net, ascending=False)
                     m1, m2, m3 = st.columns(3)
                     m1.metric("Betroffene Produkte/Reihen", f"{len(sig):,}".replace(",", "."))
-                    m2.metric(kpi_units, f"{int(sig[eff_units].sum()):,}".replace(",", "."))
+                    m2.metric(kpi_units, f"{sig[eff_units].sum():.1f}")
                     m3.metric(kpi_net, f"{sig[eff_net].sum():,.0f} €".replace(",", "."))
 
                     if sig.empty:
@@ -1094,7 +1099,7 @@ with tab_cmp:
                         out[c] = out[c].round(2)
                     out["preis_pct"] = out["preis_pct"].round(1)
                     out["qty_pct"] = out["qty_pct"].round(1)
-                    out[eff_units] = out[eff_units].round(0).astype(int)
+                    out[eff_units] = out[eff_units].round(2)
                     out = out.rename(columns={
                         "productId": "PZN", "ref": "Preisreihe",
                         "preis_vorher": "Preis vorher", "preis_nachher": "Preis nachher",
@@ -1111,7 +1116,7 @@ with tab_cmp:
                             "Menge/Tag vorher": st.column_config.NumberColumn(format="%.2f"),
                             "Menge/Tag nachher": st.column_config.NumberColumn(format="%.2f"),
                             "Menge Δ%": st.column_config.NumberColumn(format="%.1f %%"),
-                            lbl_units: st.column_config.NumberColumn(format="%d"),
+                            lbl_units: st.column_config.NumberColumn(format="%.2f"),
                             lbl_net: st.column_config.NumberColumn(format="%.2f €"),
                         },
                     )
