@@ -1064,6 +1064,13 @@ with tab_cmp:
                 "Effekte als geschätzter Verlust/Gewinn **pro Tag** (Ø nachher vs. vorher)."
             )
 
+            if metrik == "Alle":
+                combined = st.radio("Preisarten in der Tabelle",
+                                    ["Getrennt", "Zusammengefasst"], horizontal=True,
+                                    key="wk_view") == "Zusammengefasst"
+            else:
+                combined = False
+
             def render_wirkung(verlust):
                 if verlust:
                     sig = res[(res["preis_pct"] >= pth) & (res["qty_pct"] <= -qth)].copy()
@@ -1085,31 +1092,56 @@ with tab_cmp:
                 st.markdown(f"##### {titel}")
                 sig = sig.sort_values(eff_net, ascending=False)
                 m1, m2, m3 = st.columns(3)
-                m1.metric("Betroffene Produkte/Reihen", f"{len(sig):,}".replace(",", "."))
+                m1.metric("Betroffene Produkte" if combined else "Betroffene Produkte/Reihen",
+                          f"{(sig['productId'].nunique() if combined else len(sig)):,}".replace(",", "."))
                 m2.metric(kpi_units, f"{sig[eff_units].sum():.1f}")
                 m3.metric(kpi_net, f"{sig[eff_net].sum():,.0f} €".replace(",", "."))
 
                 if sig.empty:
                     st.info(leer)
                     return
-                out = sig[["productId", "Produkt", "ref", "preis_vorher", "preis_nachher",
-                           "preis_pct", "vor_rate", "nach_rate", "qty_pct", eff_units, eff_net]].copy()
-                out["ref"] = out["ref"].map(lambda r: ref_label(r, cfg))
-                for c in ["preis_vorher", "preis_nachher", "vor_rate", "nach_rate", eff_net]:
-                    out[c] = out[c].round(2)
-                out["preis_pct"] = out["preis_pct"].round(1)
-                out["qty_pct"] = out["qty_pct"].round(1)
-                out[eff_units] = out[eff_units].round(2)
-                out = out.rename(columns={
-                    "productId": "PZN", "ref": "Preisreihe",
-                    "preis_vorher": "Preis vorher", "preis_nachher": "Preis nachher",
-                    "preis_pct": "Preis Δ%", "vor_rate": "Menge/Tag vorher",
-                    "nach_rate": "Menge/Tag nachher", "qty_pct": "Menge Δ%",
-                    eff_units: lbl_units, eff_net: lbl_net,
-                })
-                st.dataframe(
-                    out, use_container_width=True, hide_index=True,
-                    column_config={
+                if combined:
+                    gp = sig.groupby("productId")
+                    out = gp.agg(Produkt=("Produkt", "first"), vor_rate=("vor_rate", "sum"),
+                                 nach_rate=("nach_rate", "sum"), eff_u=(eff_units, "sum"),
+                                 eff_n=(eff_net, "sum"))
+                    out["Preisreihen"] = gp["ref"].apply(
+                        lambda s: ", ".join(sorted({ref_label(r, cfg) for r in s})))
+                    out["qty_pct"] = (out["nach_rate"] - out["vor_rate"]) / out["vor_rate"] * 100
+                    out = out.reset_index().sort_values("eff_n", ascending=False)
+                    for c in ["vor_rate", "nach_rate", "eff_n", "eff_u"]:
+                        out[c] = out[c].round(2)
+                    out["qty_pct"] = out["qty_pct"].round(1)
+                    out = out.rename(columns={
+                        "productId": "PZN", "vor_rate": "Menge/Tag vorher",
+                        "nach_rate": "Menge/Tag nachher", "qty_pct": "Menge Δ%",
+                        "eff_u": lbl_units, "eff_n": lbl_net,
+                    })[["PZN", "Produkt", "Preisreihen", "Menge/Tag vorher",
+                        "Menge/Tag nachher", "Menge Δ%", lbl_units, lbl_net]]
+                    colcfg = {
+                        "Menge/Tag vorher": st.column_config.NumberColumn(format="%.2f"),
+                        "Menge/Tag nachher": st.column_config.NumberColumn(format="%.2f"),
+                        "Menge Δ%": st.column_config.NumberColumn(format="%.1f %%"),
+                        lbl_units: st.column_config.NumberColumn(format="%.2f"),
+                        lbl_net: st.column_config.NumberColumn(format="%.2f €"),
+                    }
+                else:
+                    out = sig[["productId", "Produkt", "ref", "preis_vorher", "preis_nachher",
+                               "preis_pct", "vor_rate", "nach_rate", "qty_pct", eff_units, eff_net]].copy()
+                    out["ref"] = out["ref"].map(lambda r: ref_label(r, cfg))
+                    for c in ["preis_vorher", "preis_nachher", "vor_rate", "nach_rate", eff_net]:
+                        out[c] = out[c].round(2)
+                    out["preis_pct"] = out["preis_pct"].round(1)
+                    out["qty_pct"] = out["qty_pct"].round(1)
+                    out[eff_units] = out[eff_units].round(2)
+                    out = out.rename(columns={
+                        "productId": "PZN", "ref": "Preisreihe",
+                        "preis_vorher": "Preis vorher", "preis_nachher": "Preis nachher",
+                        "preis_pct": "Preis Δ%", "vor_rate": "Menge/Tag vorher",
+                        "nach_rate": "Menge/Tag nachher", "qty_pct": "Menge Δ%",
+                        eff_units: lbl_units, eff_net: lbl_net,
+                    })
+                    colcfg = {
                         "Preis vorher": st.column_config.NumberColumn(format="%.2f €"),
                         "Preis nachher": st.column_config.NumberColumn(format="%.2f €"),
                         "Preis Δ%": st.column_config.NumberColumn(format="%.1f %%"),
@@ -1118,8 +1150,8 @@ with tab_cmp:
                         "Menge Δ%": st.column_config.NumberColumn(format="%.1f %%"),
                         lbl_units: st.column_config.NumberColumn(format="%.2f"),
                         lbl_net: st.column_config.NumberColumn(format="%.2f €"),
-                    },
-                )
+                    }
+                st.dataframe(out, use_container_width=True, hide_index=True, column_config=colcfg)
                 buf = io.BytesIO()
                 with pd.ExcelWriter(buf, engine="openpyxl") as w:
                     out.to_excel(w, index=False, sheet_name="Preiswirkung")
