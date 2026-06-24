@@ -347,6 +347,41 @@ def render_data_calendar(drive):
             st.success(f"{betroffen:,} Zeilen gelöscht.".replace(",", "."))
             st.rerun()
 
+    # Snapshot-Datum leeren (Quote/Channel/Master/Preislogik – Orderlines bleiben)
+    st.divider()
+    st.markdown("##### Snapshot-Datum leeren")
+    st.caption("Löscht Quote-, Channel-, Master- und Preislogik-Daten dieses Datums. "
+               "Orderlines bleiben erhalten.")
+    snaps = list_snapshots(drive)
+    leerbar = {iso: v for iso, v in snaps.items()
+               if any(v.get(k) for k in ("quote_id", "channel_id", "master_id", "pricelogic_id"))}
+    if not leerbar:
+        st.caption("Keine Snapshot-Daten vorhanden.")
+    else:
+        sel_clear = st.selectbox("Datum", list(leerbar.keys()), index=len(leerbar) - 1,
+                                 format_func=fmt_date, key="clear_snap_date")
+        v = leerbar[sel_clear]
+        vorhanden = [n for n, k in (("Quote", "quote_id"), ("Channel", "channel_id"),
+                                    ("Master", "master_id"), ("Preislogik", "pricelogic_id"))
+                     if v.get(k)]
+        st.caption("Vorhanden: " + ", ".join(vorhanden))
+        if st.button(":material/delete_forever: Snapshot leeren", key="clear_snap_btn"):
+            st.session_state["confirm_clear_snap"] = sel_clear
+        if st.session_state.get("confirm_clear_snap") == sel_clear:
+            st.warning(f"Wirklich alle Preisdaten ({', '.join(vorhanden)}) zum "
+                       f"{fmt_date(sel_clear)} löschen? Orderlines bleiben erhalten.")
+            b1, b2 = st.columns(2)
+            if b1.button("Leeren", type="primary", use_container_width=True, key="clear_snap_yes"):
+                deleted = pl.clear_snapshot(drive, sel_clear)
+                list_snapshots.clear()
+                load_snapshot.clear()
+                st.session_state["confirm_clear_snap"] = None
+                st.success(f"Geleert ({fmt_date(sel_clear)}): {', '.join(deleted) or '—'}")
+                st.rerun()
+            if b2.button("Abbruch", use_container_width=True, key="clear_snap_no"):
+                st.session_state["confirm_clear_snap"] = None
+                st.rerun()
+
 
 def render_pricing_settings(drive, cfg):
     """Channel-Bezeichnungen + Source-Zuordnung (im Popover, als Form)."""
@@ -484,9 +519,7 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Preislogik nicht lesbar: {e}")
 
-    if st.button(":material/save: In Drive speichern", type="primary", use_container_width=True,
-                 disabled=(quote_file is None and channel_file is None and master_file is None
-                           and orderlines_file is None and pricelogic_file is None)):
+    def _do_save():
         folder_id = get_pricing_folder_id(drive)
         ddmmyy = snap_datum.strftime("%d%m%y")
         gespeichert = []
@@ -514,7 +547,42 @@ with st.sidebar:
             gespeichert.append("Preislogik")
         list_snapshots.clear()
         load_snapshot.clear()
-        st.success(f"Gespeichert: {', '.join(gespeichert)}")
+        st.session_state["save_msg"] = f"Gespeichert: {', '.join(gespeichert)}"
+        st.session_state["confirm_replace"] = False
+
+    # Konflikt-Check: existieren für dieses Datum bereits Daten der hochgeladenen Arten?
+    _entry = list_snapshots(drive).get(snap_datum.isoformat(), {})
+    _conflicts = []
+    if quote_file is not None and _entry.get("quote_id"):
+        _conflicts.append("Quote-Preise")
+    if channel_file is not None and _entry.get("channel_id"):
+        _conflicts.append("Channel-Preise")
+    if master_file is not None and _entry.get("master_id"):
+        _conflicts.append("Masterdatei")
+    if pricelogic_file is not None and _entry.get("pricelogic_id"):
+        _conflicts.append("Preislogik")
+
+    if st.button(":material/save: In Drive speichern", type="primary", use_container_width=True,
+                 disabled=(quote_file is None and channel_file is None and master_file is None
+                           and orderlines_file is None and pricelogic_file is None)):
+        if _conflicts:
+            st.session_state["confirm_replace"] = True
+        else:
+            _do_save()
+
+    if st.session_state.get("confirm_replace") and _conflicts:
+        st.warning(f"Es existieren bereits Daten zu diesem Datum ({snap_datum:%d.%m.%Y}): "
+                   f"{', '.join(_conflicts)}. Wollen Sie diese Daten ersetzen?")
+        cc1, cc2 = st.columns(2)
+        if cc1.button("Ersetzen", type="primary", use_container_width=True, key="cr_yes"):
+            _do_save()
+            st.rerun()
+        if cc2.button("Abbruch", use_container_width=True, key="cr_no"):
+            st.session_state["confirm_replace"] = False
+            st.rerun()
+
+    if st.session_state.get("save_msg"):
+        st.success(st.session_state.pop("save_msg"))
 
     # Daten je Datum (aktueller Monat) + Link zur Vollansicht
     st.divider()

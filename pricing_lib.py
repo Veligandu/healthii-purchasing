@@ -272,6 +272,23 @@ def load_pricelogic(drive, iso_datum: str) -> pd.DataFrame:
                        dtype={"productId": str})
 
 
+def clear_snapshot(drive, iso_datum: str) -> list:
+    """Löscht (in den Papierkorb) Quote/Channel/Master/Preislogik eines Snapshot-Datums.
+    Orderlines und Report bleiben erhalten. Rückgabe: Liste der gelöschten Arten."""
+    snaps = list_snapshots(drive)
+    entry = snaps.get(iso_datum)
+    if not entry:
+        return []
+    deleted = []
+    for name, key in (("Quote", "quote_id"), ("Channel", "channel_id"),
+                      ("Master", "master_id"), ("Preislogik", "pricelogic_id")):
+        fid = entry.get(key)
+        if fid:
+            drive.files().update(fileId=fid, body={"trashed": True}).execute(num_retries=3)
+            deleted.append(name)
+    return deleted
+
+
 # ─── Orderlines (Abverkauf) ──────────────────────────────────────────────────────
 
 def _de_num(series: pd.Series) -> pd.Series:
