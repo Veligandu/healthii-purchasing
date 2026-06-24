@@ -1086,23 +1086,27 @@ with tab_cmp:
                 bed = bed.sort_values("impact", ascending=False)
 
                 def bed_table(sub):
-                    o = sub[["productId", "Name", "pct", "_rev"]].copy()
+                    o = sub[["productId", "Name", "preis_a", "preis_b", "pct", "_rev"]].copy()
                     o["pct"] = (o["pct"] * 100).round(1)
+                    o["preis_a"] = o["preis_a"].round(2)
+                    o["preis_b"] = o["preis_b"].round(2)
                     o["_rev"] = o["_rev"].round(2)
-                    return o.rename(columns={"productId": "PZN", "pct": "% Preisänderung",
+                    return o.rename(columns={"productId": "PZN", "preis_a": "Preis vorher",
+                                             "preis_b": "Preis nachher", "pct": "% Preisänderung",
                                              "_rev": "Umsatz 30 Tage €"})
 
+                bed_colcfg = {
+                    "Preis vorher": st.column_config.NumberColumn(format="%.2f €"),
+                    "Preis nachher": st.column_config.NumberColumn(format="%.2f €"),
+                    "% Preisänderung": st.column_config.NumberColumn(format="%.1f %%"),
+                    "Umsatz 30 Tage €": st.column_config.NumberColumn(format="%.2f €"),
+                }
                 if bed.empty:
                     st.info("Keine Umsatzdaten im 30-Tage-Fenster für diese Preisart – "
                             "umsatzgewichtete Bewertung nicht möglich.")
                 else:
-                    st.dataframe(
-                        bed_table(bed.head(anzahl)), use_container_width=True, hide_index=True,
-                        column_config={
-                            "% Preisänderung": st.column_config.NumberColumn(format="%.1f %%"),
-                            "Umsatz 30 Tage €": st.column_config.NumberColumn(format="%.2f €"),
-                        },
-                    )
+                    st.dataframe(bed_table(bed.head(anzahl)), use_container_width=True,
+                                 hide_index=True, column_config=bed_colcfg)
 
                 # ── Export ──
                 st.divider()
