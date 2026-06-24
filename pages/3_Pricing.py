@@ -601,6 +601,7 @@ if _panel:
             render_data_calendar(drive)
         else:
             render_pricing_settings(drive, cfg)
+    st.stop()  # bei offenem Panel keine Tabs rendern (Panel ersetzt die Ansicht)
 
 tab_snap, tab_cmp, tab_master, tab_renner, tab_produkt = st.tabs(
     [":material/bar_chart: Momentaufnahme", ":material/compare_arrows: Vergleich", ":material/folder_open: Masterdatei-Analyse", ":material/leaderboard: Rennerliste", ":material/search: Produktansicht"]
