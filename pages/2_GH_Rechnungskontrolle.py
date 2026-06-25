@@ -210,73 +210,94 @@ def get_gh_subfolder_id(_drive, gh):
     return folder["id"]
 
 
+def _lade_monat_xlsx(buf):
+    """Altformat: Monatsdaten aus xlsx lesen → 8-Tuple (Abwärtskompatibilität)."""
+    xls = pd.ExcelFile(buf)
+    df_roh = (pd.read_excel(xls, "Rohdaten", dtype={"PZN": str, "Beleg": str})
+              if "Rohdaten" in xls.sheet_names else None)
+    totals = {}
+    if "Summen" in xls.sheet_names:
+        df_t = pd.read_excel(xls, "Summen", dtype={"Beleg": str})
+        totals = dict(zip(df_t["Beleg"], df_t["Warenwert_Beleg"]))
+    abr = {}
+    if "Abrechnung" in xls.sheet_names:
+        df_a = pd.read_excel(xls, "Abrechnung", dtype={"Rechnungsnr": str})
+        for _, r in df_a.iterrows():
+            datum = r["Datum"] if "Datum" in df_a.columns and pd.notna(r["Datum"]) else None
+            if datum is not None:
+                datum = str(datum)[:10]
+            abr[str(r["Rechnungsnr"])] = {"datum": datum, "betrag": r["Betrag"]}
+    report = ""
+    if "Report" in xls.sheet_names:
+        df_rep = pd.read_excel(xls, "Report")
+        if not df_rep.empty and "Report" in df_rep.columns:
+            v = df_rep["Report"].iloc[0]
+            report = "" if pd.isna(v) else str(v)
+    gesperrt = False
+    gesperrt_am = ""
+    ausgeschlossen = []
+    if "Meta" in xls.sheet_names:
+        df_meta = pd.read_excel(xls, "Meta")
+        mm = dict(zip(df_meta.iloc[:, 0].astype(str), df_meta.iloc[:, 1].astype(str)))
+        gesperrt = str(mm.get("gesperrt", "")).strip().lower() in ("true", "1", "ja")
+        gesperrt_am = str(mm.get("gesperrt_am", "") or "")
+        ausgeschlossen = [b.strip() for b in str(mm.get("ausgeschlossen", "") or "").split(",") if b.strip()]
+    snapshot = {}
+    if "PreiseSnapshot" in xls.sheet_names:
+        df_s = pd.read_excel(xls, "PreiseSnapshot", dtype={"PZN": str})
+        snapshot = dict(zip(df_s["PZN"].astype(str), df_s["Preis"]))
+    return df_roh, totals, abr, report, gesperrt, gesperrt_am, snapshot, ausgeschlossen
+
+
 def lade_monat_aus_drive(_drive, gh, jahr, monat):
-    """Lädt gespeicherten Monat eines GH aus Drive.
-    Gibt (df_roh, totals, abr, report) zurück — df_roh=None falls keine Rohdaten."""
+    """Lädt gespeicherten Monat (Parquet-Zip bevorzugt, sonst Alt-xlsx).
+    Gibt (df_roh, totals, abr, report, gesperrt, gesperrt_am, snapshot, ausgeschlossen)."""
+    import zipfile, json
     try:
-        from googleapiclient.http import MediaIoBaseDownload
         folder_id = get_gh_subfolder_id(_drive, gh)
-        name = f"gh_rechnung_{jahr}_{monat:02d}.xlsx"
-        q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
-        res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
-        files = res.get("files", [])
-        if not files:
-            return None, {}, {}, "", False, "", {}, []
-        buf = io.BytesIO()
-        dl = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=files[0]["id"]))
-        done = False
-        while not done:
-            _, done = dl.next_chunk()
-        buf.seek(0)
-        xls = pd.ExcelFile(buf)
-        df_roh = (
-            pd.read_excel(xls, "Rohdaten", dtype={"PZN": str, "Beleg": str})
-            if "Rohdaten" in xls.sheet_names else None
-        )
-        totals = {}
-        if "Summen" in xls.sheet_names:
-            df_t = pd.read_excel(xls, "Summen", dtype={"Beleg": str})
-            totals = dict(zip(df_t["Beleg"], df_t["Warenwert_Beleg"]))
-        abr = {}
-        if "Abrechnung" in xls.sheet_names:
-            df_a = pd.read_excel(xls, "Abrechnung", dtype={"Rechnungsnr": str})
-            for _, r in df_a.iterrows():
-                datum = r["Datum"] if "Datum" in df_a.columns and pd.notna(r["Datum"]) else None
-                if datum is not None:
-                    datum = str(datum)[:10]
-                abr[str(r["Rechnungsnr"])] = {"datum": datum, "betrag": r["Betrag"]}
-        report = ""
-        if "Report" in xls.sheet_names:
-            df_rep = pd.read_excel(xls, "Report")
-            if not df_rep.empty and "Report" in df_rep.columns:
-                v = df_rep["Report"].iloc[0]
-                report = "" if pd.isna(v) else str(v)
-        gesperrt = False
-        gesperrt_am = ""
-        ausgeschlossen = []
-        if "Meta" in xls.sheet_names:
-            df_meta = pd.read_excel(xls, "Meta")
-            mm = dict(zip(df_meta.iloc[:, 0].astype(str), df_meta.iloc[:, 1].astype(str)))
-            gesperrt = str(mm.get("gesperrt", "")).strip().lower() in ("true", "1", "ja")
-            gesperrt_am = str(mm.get("gesperrt_am", "") or "")
-            ausgeschlossen = [b.strip() for b in str(mm.get("ausgeschlossen", "") or "").split(",") if b.strip()]
-        snapshot = {}
-        if "PreiseSnapshot" in xls.sheet_names:
-            df_s = pd.read_excel(xls, "PreiseSnapshot", dtype={"PZN": str})
-            snapshot = dict(zip(df_s["PZN"].astype(str), df_s["Preis"]))
-        return df_roh, totals, abr, report, gesperrt, gesperrt_am, snapshot, ausgeschlossen
+        base = f"gh_rechnung_{jahr}_{monat:02d}"
+        files = _drive_finde(_drive, folder_id, base + ".zip")
+        if files:
+            buf = _drive_download(_drive, files[0]["id"])
+            with zipfile.ZipFile(buf) as z:
+                namen = set(z.namelist())
+                df_roh = None
+                if "rohdaten.parquet" in namen:
+                    df_roh = pd.read_parquet(io.BytesIO(z.read("rohdaten.parquet")))
+                    for c in ("PZN", "Beleg"):
+                        if c in df_roh.columns:
+                            df_roh[c] = df_roh[c].astype(str)
+                totals = {}
+                if "summen.parquet" in namen:
+                    dt = pd.read_parquet(io.BytesIO(z.read("summen.parquet")))
+                    totals = dict(zip(dt["Beleg"].astype(str), dt["Warenwert_Beleg"]))
+                abr = {}
+                if "abrechnung.parquet" in namen:
+                    da = pd.read_parquet(io.BytesIO(z.read("abrechnung.parquet")))
+                    for _, r in da.iterrows():
+                        datum = r["Datum"]
+                        datum = None if pd.isna(datum) else str(datum)[:10]
+                        abr[str(r["Rechnungsnr"])] = {"datum": datum, "betrag": r["Betrag"]}
+                meta = json.loads(z.read("meta.json").decode("utf-8")) if "meta.json" in namen else {}
+            return (df_roh, totals, abr, str(meta.get("report", "")),
+                    bool(meta.get("gesperrt", False)), str(meta.get("gesperrt_am", "")),
+                    {str(p): v for p, v in (meta.get("snapshot") or {}).items()},
+                    [str(b) for b in (meta.get("ausgeschlossen") or [])])
+        files = _drive_finde(_drive, folder_id, base + ".xlsx")   # Altformat
+        if files:
+            return _lade_monat_xlsx(_drive_download(_drive, files[0]["id"]))
+        return None, {}, {}, "", False, "", {}, []
     except Exception:
         return None, {}, {}, "", False, "", {}, []
 
 
 def monat_existiert_in_drive(_drive, gh, jahr, monat):
-    """True, wenn für GH+Monat bereits eine gespeicherte Datei in Drive liegt."""
+    """True, wenn für GH+Monat bereits eine gespeicherte Datei (zip oder xlsx) liegt."""
     try:
         folder_id = get_gh_subfolder_id(_drive, gh)
-        name = f"gh_rechnung_{jahr}_{monat:02d}.xlsx"
-        q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
-        res = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
-        return bool(res.get("files", []))
+        base = f"gh_rechnung_{jahr}_{monat:02d}"
+        return bool(_drive_finde(_drive, folder_id, base + ".zip")
+                    or _drive_finde(_drive, folder_id, base + ".xlsx"))
     except Exception:
         return False
 
@@ -284,54 +305,43 @@ def monat_existiert_in_drive(_drive, gh, jahr, monat):
 def speichere_monat_in_drive(_drive, gh, df_agg, df_roh, totals, abr, report,
                              jahr, monat, gesperrt=False, gesperrt_am="", snapshot=None,
                              ausgeschlossen=None):
-    """Speichert Monatstabelle + Rohdaten + Summen + Abrechnung + Report + Sperre/Snapshot."""
-    from googleapiclient.http import MediaIoBaseUpload
+    """Speichert die Monatsdaten als Parquet-Zip in Drive (schnell). df_agg wird nicht
+    gespeichert (aus Rohdaten neu berechenbar); die menschenlesbare xlsx erzeugt der
+    Download-Button on-demand."""
+    import zipfile, json
     folder_id = get_gh_subfolder_id(_drive, gh)
-    name = f"gh_rechnung_{jahr}_{monat:02d}.xlsx"
+    base = f"gh_rechnung_{jahr}_{monat:02d}"
     df_totals = pd.DataFrame(
-        [{"Beleg": b, "Warenwert_Beleg": t} for b, t in (totals or {}).items()]
-    )
+        [{"Beleg": b, "Warenwert_Beleg": t} for b, t in (totals or {}).items()],
+        columns=["Beleg", "Warenwert_Beleg"])
     df_abr = pd.DataFrame(
         [{"Rechnungsnr": n, "Datum": _abr_norm(v)[0], "Betrag": _abr_norm(v)[1]}
-         for n, v in (abr or {}).items()]
-    )
-    df_meta = pd.DataFrame({"Schluessel": ["gesperrt", "gesperrt_am", "ausgeschlossen"],
-                            "Wert": [str(bool(gesperrt)), str(gesperrt_am or ""),
-                                     ",".join(str(b) for b in (ausgeschlossen or []))]})
-    df_snap = pd.DataFrame(
-        [{"PZN": p, "Preis": v} for p, v in (snapshot or {}).items()]
-    )
+         for n, v in (abr or {}).items()],
+        columns=["Rechnungsnr", "Datum", "Betrag"])
+    meta = {
+        "gesperrt":       bool(gesperrt),
+        "gesperrt_am":    str(gesperrt_am or ""),
+        "ausgeschlossen": [str(b) for b in (ausgeschlossen or [])],
+        "report":         re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(report or "")),
+        "snapshot":       {str(p): float(v) for p, v in (snapshot or {}).items()},
+    }
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        df_agg.to_excel(w, index=False, sheet_name=f"Monat {monat:02d}-{jahr}")
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         if df_roh is not None:
-            df_roh.to_excel(w, index=False, sheet_name="Rohdaten")
-        if not df_totals.empty:
-            df_totals.to_excel(w, index=False, sheet_name="Summen")
-        if not df_abr.empty:
-            df_abr.to_excel(w, index=False, sheet_name="Abrechnung")
-        if report:
-            # ungültige Steuerzeichen entfernen (sonst bricht openpyxl ab)
-            _rep = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(report))
-            pd.DataFrame({"Report": [_rep]}).to_excel(w, index=False, sheet_name="Report")
-        df_meta.to_excel(w, index=False, sheet_name="Meta")
-        if not df_snap.empty:
-            df_snap.to_excel(w, index=False, sheet_name="PreiseSnapshot")
-    buf.seek(0)
-    media = MediaIoBaseUpload(
-        buf,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
-    existing = _drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
-    if existing:
-        _drive.files().update(fileId=existing[0]["id"], media_body=media).execute()
-    else:
-        _drive.files().create(
-            body={"name": name, "parents": [folder_id]},
-            media_body=media,
-            fields="id",
-        ).execute()
+            _b = io.BytesIO(); df_roh.to_parquet(_b, index=False)
+            z.writestr("rohdaten.parquet", _b.getvalue())
+        _b = io.BytesIO(); df_totals.to_parquet(_b, index=False)
+        z.writestr("summen.parquet", _b.getvalue())
+        _b = io.BytesIO(); df_abr.to_parquet(_b, index=False)
+        z.writestr("abrechnung.parquet", _b.getvalue())
+        z.writestr("meta.json", json.dumps(meta))
+    _drive_upload(_drive, folder_id, base + ".zip", buf, "application/zip")
+    # altes xlsx-Format aufräumen, damit es nicht doppelt erscheint
+    try:
+        for f in _drive_finde(_drive, folder_id, base + ".xlsx"):
+            _drive.files().update(fileId=f["id"], body={"trashed": True}).execute()
+    except Exception:
+        pass
 
 
 def get_pdf_folder_id(_drive, gh, jahr, monat, anlegen=True, prefix="pdfs"):
