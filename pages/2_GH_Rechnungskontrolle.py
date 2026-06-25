@@ -311,7 +311,9 @@ def speichere_monat_in_drive(_drive, gh, df_agg, df_roh, totals, abr, report,
         if not df_abr.empty:
             df_abr.to_excel(w, index=False, sheet_name="Abrechnung")
         if report:
-            pd.DataFrame({"Report": [report]}).to_excel(w, index=False, sheet_name="Report")
+            # ungültige Steuerzeichen entfernen (sonst bricht openpyxl ab)
+            _rep = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(report))
+            pd.DataFrame({"Report": [_rep]}).to_excel(w, index=False, sheet_name="Report")
         df_meta.to_excel(w, index=False, sheet_name="Meta")
         if not df_snap.empty:
             df_snap.to_excel(w, index=False, sheet_name="PreiseSnapshot")
