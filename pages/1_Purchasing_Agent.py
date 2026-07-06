@@ -153,8 +153,10 @@ def speichere_neuanlagen(drive, df):
             ).execute()
 
 
-def injiziere_neuanlagen(df_bestellen, neuanlagen_df):
-    """Fügt Neuanlagen als grün markierte Zeilen bei Herstellern hinzu, die bestellt werden."""
+def injiziere_neuanlagen(df_bestellen, neuanlagen_df, bekannte_pzn=None):
+    """Fügt Neuanlagen als grün markierte Zeilen bei Herstellern hinzu, die bestellt werden.
+    PZNs, die bereits in der Wiederbestelldatei stehen (bekannte_pzn), werden übersprungen —
+    für die greift die normale Bedarfslogik."""
     if df_bestellen is None or df_bestellen.empty or neuanlagen_df is None or neuanlagen_df.empty:
         if df_bestellen is not None and "Neuanlage" not in df_bestellen.columns:
             df_bestellen = df_bestellen.copy()
@@ -168,11 +170,12 @@ def injiziere_neuanlagen(df_bestellen, neuanlagen_df):
 
     bestellte_hersteller = set(df["Hersteller"].astype(str))
     vorhandene_pzn = set(df["Pzn"])
+    bekannte_pzn = set(bekannte_pzn or [])
     neue_zeilen = []
     for _, na in neuanlagen_df.iterrows():
         herst = str(na["Hersteller"]).strip()
         pzn   = str(na["PZN"]).strip()
-        if herst not in bestellte_hersteller or pzn in vorhandene_pzn:
+        if herst not in bestellte_hersteller or pzn in vorhandene_pzn or pzn in bekannte_pzn:
             continue
         menge = int(na["Wunschmenge"]) if pd.notna(na["Wunschmenge"]) else 1
         # MBW vom bestehenden Hersteller-Block übernehmen
@@ -260,6 +263,23 @@ def loesche_edit_stand(drive):
             drive.files().delete(fileId=f["id"]).execute()
     except Exception:
         pass
+
+
+def bereinige_neuanlagen(drive, df_input):
+    """Entfernt Neuanlagen, deren PZN inzwischen in der Wiederbestelldatei steht —
+    die laufen ab dann über die normale Bedarfslogik."""
+    try:
+        na_df = lade_neuanlagen(drive)
+        if na_df.empty or df_input is None or df_input.empty:
+            return na_df
+        bekannt = set(df_input["Pzn"].astype(str))
+        rest = na_df[~na_df["PZN"].astype(str).isin(bekannt)]
+        if len(rest) < len(na_df):
+            speichere_neuanlagen(drive, rest)
+            return st.session_state["_neuanlagen_cache"]
+        return na_df
+    except Exception:
+        return lade_neuanlagen(drive)
 
 
 def lade_historie_cached(force=False):
@@ -672,7 +692,9 @@ if not st.session_state.drive_verbunden:
                     st.session_state.excel_bytes_input = excel_bytes
                     st.session_state.uploaded_filename = "wiederbestellung_aktuell.xlsx"
                     if not ergebnis["bestellen"].empty:
-                        _bv = injiziere_neuanlagen(ergebnis["bestellen"].copy(), lade_neuanlagen(drive))
+                        _na = bereinige_neuanlagen(drive, ergebnis["df_input"])
+                        _bekannt = set(ergebnis["df_input"]["Pzn"].astype(str))
+                        _bv = injiziere_neuanlagen(ergebnis["bestellen"].copy(), _na, _bekannt)
                         st.session_state.df_bestellen_edit = _bv
                         # Gesicherten Bearbeitungsstand wiederherstellen (falls vorhanden)
                         _edit_gespeichert = lade_edit_stand(drive)
@@ -795,8 +817,10 @@ with st.sidebar:
                 st.session_state.ergebnis            = ergebnis
                 st.session_state.ergebnis_timestamp  = _dt.now().strftime("%d.%m.%Y %H:%M:%S")
                 if not ergebnis["bestellen"].empty:
+                    _na = bereinige_neuanlagen(st.session_state.drive, ergebnis["df_input"])
+                    _bekannt = set(ergebnis["df_input"]["Pzn"].astype(str))
                     st.session_state.df_bestellen_edit = injiziere_neuanlagen(
-                        ergebnis["bestellen"].copy(), lade_neuanlagen(st.session_state.drive)
+                        ergebnis["bestellen"].copy(), _na, _bekannt
                     )
                 else:
                     st.session_state.df_bestellen_edit = pd.DataFrame()
@@ -1240,6 +1264,17 @@ with tab1:
                             st.success(f"Lokal & Drive gespeichert: {order_name}", icon=":material/check_circle:")
                         else:
                             st.success(f"Lokal gespeichert: {order_name}", icon=":material/check_circle:")
+
+                        # Bestellte Neuanlagen aus der Liste entfernen
+                        try:
+                            _na_df = lade_neuanlagen(drive_conn)
+                            if not _na_df.empty:
+                                _bestellt = set(df_final["Pzn"].astype(str))
+                                _na_rest = _na_df[~_na_df["PZN"].astype(str).isin(_bestellt)]
+                                if len(_na_rest) < len(_na_df):
+                                    speichere_neuanlagen(drive_conn, _na_rest)
+                        except Exception:
+                            pass
 
                         # Session zurücksetzen
                         st.session_state.ergebnis          = None
