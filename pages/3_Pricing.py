@@ -872,6 +872,26 @@ with tab_snap:
                                      alt.Tooltip("rev:Q", format=".0f", title="Umsatz €")],
                         ), use_container_width=True)
 
+                    # Ø-Marge je Preisart je Preiskategorie
+                    margin_map = {"Quote": "quote_margin",
+                                  **{lbl: f"cp{i + 1}_margin" for i, lbl in enumerate(CH_LABELS)}}
+                    m_cols = {lbl: col for lbl, col in margin_map.items() if col in plog.columns}
+                    if m_cols:
+                        mt = plog.copy()
+                        for col in m_cols.values():
+                            mt[col] = pd.to_numeric(mt[col], errors="coerce")
+                        mtab = (mt.groupby("pricing_category")[list(m_cols.values())].mean() * 100).round(1)
+                        mtab = mtab.rename(columns={v: k for k, v in m_cols.items()}).reset_index()
+                        mtab = mtab.rename(columns={"pricing_category": "Preiskategorie"})
+                        st.markdown("**Ø relative Marge je Preisart (je Preiskategorie)**")
+                        st.dataframe(
+                            mtab, use_container_width=True, hide_index=True,
+                            column_config={lbl: st.column_config.NumberColumn(format="%.1f %%")
+                                           for lbl in m_cols},
+                        )
+                        st.caption("Durchschnitt der berechneten relativen Margen aus den "
+                                   "Preislogikdaten (ungewichtet, je Preiskategorie).")
+
                     logic_map = {"Quote": "quote_applied_logic",
                                  **{lbl: f"cp{i + 1}_applied_logic" for i, lbl in enumerate(CH_LABELS)}}
                     pa = st.selectbox("Preisart (angewandte Logik)", list(logic_map.keys()),
