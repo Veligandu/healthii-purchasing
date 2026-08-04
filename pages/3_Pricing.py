@@ -1817,6 +1817,77 @@ def render_produktansicht():
                         )
                         st.altair_chart(pie, use_container_width=True)
 
+                # ── Preisberechnung – Herleitung ──
+                st.divider()
+                st.markdown("##### Preisberechnung – Herleitung")
+
+                # (1) Letzter aktueller EK (netto) aus den Orderlines, mit Datum
+                ek_val, ek_date = None, None
+                if not ol_p.empty and "ek" in ol_p.columns:
+                    pol = ol_p[ol_p["productId"] == pzn].copy()
+                    pol["_ek"] = pd.to_numeric(pol["ek"], errors="coerce")
+                    pol = pol[pol["_ek"] > 0]
+                    if not pol.empty:
+                        lr = pol.sort_values("d").iloc[-1]
+                        ek_val, ek_date = float(lr["_ek"]), lr["d"]
+
+                # (2) Letzte Preiskategorie + MwSt aus den Preislogikdaten, mit Datum
+                cat_val, cat_date, vat_val = None, None, None
+                pl_dates = [d for d in snaps if snaps[d].get("pricelogic_id")]
+                for d in sorted(pl_dates, reverse=True):
+                    plg = load_pricelogic(drive, d)
+                    if plg.empty:
+                        continue
+                    rr = plg[plg["productId"] == pzn]
+                    if rr.empty:
+                        continue
+                    rr = rr.iloc[0]
+                    cat_val = rr.get("pricing_category")
+                    cat_date = d
+                    vat_val = pd.to_numeric(rr.get("vat_percent"), errors="coerce")
+                    break
+                vat = float(vat_val) if pd.notna(vat_val) else 19.0
+
+                h1, h2 = st.columns(2)
+                with h1:
+                    st.metric("Letzter EK (netto)", f"{ek_val:.2f} €" if ek_val else "—",
+                              help="Letzter Unit-EK (netto, „Unit Ek Net“) aus den Orderlines.")
+                    st.caption(f"Stand {ek_date:%d.%m.%Y}" if ek_date is not None
+                               else "Kein EK in den Orderlines für diese PZN.")
+                with h2:
+                    st.metric("Letzte Preiskategorie", cat_val or "—")
+                    st.caption(f"aus Preislogik · Stand {fmt_date(cat_date)} · MwSt {vat:.0f} %"
+                               if cat_date else "Keine Preislogikdaten für diese PZN.")
+
+                # (3) Daraus entstehende Margen je Preisart (aktuelle Preise vs. letzter EK)
+                if ek_val:
+                    mrows = []
+                    for reihe in vorhanden:
+                        brutto = float(akt_idx.loc[reihe, "Preis"])
+                        netto = brutto / (1 + vat / 100)
+                        marge = (netto - ek_val) / netto * 100 if netto > 0 else None
+                        mrows.append({"Preisart": reihe, "Preis brutto": round(brutto, 2),
+                                      "Preis netto": round(netto, 2),
+                                      "Marge %": round(marge, 1) if marge is not None else None})
+                    mdf = pd.DataFrame(mrows)
+                    st.markdown("**Resultierende Marge je Preisart**")
+                    st.dataframe(
+                        mdf, use_container_width=True, hide_index=True,
+                        column_config={
+                            "Preis brutto": st.column_config.NumberColumn(format="%.2f €"),
+                            "Preis netto": st.column_config.NumberColumn(format="%.2f €"),
+                            "Marge %": st.column_config.NumberColumn(format="%.1f %%"),
+                        },
+                    )
+                    st.caption(
+                        f"Marge = (Netto-Preis − EK) / Netto-Preis. Aktuelle Preise vom "
+                        f"{fmt_date(letztes)}, letzter EK vom "
+                        f"{ek_date:%d.%m.%Y} ({ek_val:.2f} €), MwSt {vat:.0f} %."
+                    )
+                else:
+                    st.caption("Keine EK-Daten in den Orderlines – Margen können nicht "
+                               "hergeleitet werden.")
+
 
 with tab_produkt:
     render_produktansicht()
