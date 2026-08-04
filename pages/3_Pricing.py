@@ -892,34 +892,6 @@ with tab_snap:
                         st.caption("Durchschnitt der berechneten relativen Margen aus den "
                                    "Preislogikdaten (ungewichtet, je Preiskategorie).")
 
-                    logic_map = {"Quote": "quote_applied_logic",
-                                 **{lbl: f"cp{i + 1}_applied_logic" for i, lbl in enumerate(CH_LABELS)}}
-                    pa = st.selectbox("Preisart (angewandte Logik)", list(logic_map.keys()),
-                                      key="plog_metrik")
-                    lcol = logic_map[pa]
-                    if lcol in plog.columns:
-                        sub = plog[["productId", "pricing_category", lcol]].copy()
-                        sub["rev"] = sub["productId"].map(rev).fillna(0.0)
-                        sub = sub[sub["rev"] > 0]
-                        sub["Logik"] = sub[lcol].fillna("—")
-                        g2 = sub.groupby(["pricing_category", "Logik"])["rev"].sum().reset_index()
-                        g2["Anteil"] = (g2["rev"] /
-                                        g2.groupby("pricing_category")["rev"].transform("sum") * 100).round(1)
-                        st.markdown(f"**Je Preiskategorie: Umsatzanteil je angewandter Logik** ({pa})")
-                        st.altair_chart(
-                            alt.Chart(g2).mark_bar().encode(
-                                x=alt.X("pricing_category:N", title="Preiskategorie"),
-                                y=alt.Y("Anteil:Q", title="Umsatzanteil %", stack="zero"),
-                                color=alt.Color("Logik:N", title="Angewandte Logik"),
-                                tooltip=[alt.Tooltip("pricing_category:N", title="Kategorie"),
-                                         alt.Tooltip("Logik:N", title="Logik"),
-                                         alt.Tooltip("Anteil:Q", format=".1f", title="Anteil %"),
-                                         alt.Tooltip("rev:Q", format=".0f", title="Umsatz €")],
-                            ), use_container_width=True)
-                        st.caption("Logik-Verteilung nur für kategorisierte Produkte.")
-                    else:
-                        st.caption(f"Spalte „{lcol}“ nicht in den Preislogikdaten enthalten.")
-
             # ── Report zu dieser Momentaufnahme ────────────────────────────────
             st.divider()
             st.markdown(f"##### Report – {fmt_date(sel)}")
