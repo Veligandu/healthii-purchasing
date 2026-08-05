@@ -232,7 +232,7 @@ def _data_by_date(drive):
     info = {}
     for iso, v in list_snapshots(drive).items():
         tags = [t for t, k in (("Quote", "quote_id"), ("Channel", "channel_id"),
-                                ("Master", "master_id")) if v.get(k)]
+                                ("Master", "master_id"), ("Preislogik", "pricelogic_id")) if v.get(k)]
         if tags:
             info[iso] = {"snap": tags, "ol": 0}
     ol = load_orderlines(drive)
@@ -244,7 +244,8 @@ def _data_by_date(drive):
 
 # Datenart → Farbe (für Punkte im Kalender + Legende)
 CAL_TYPE_COLORS = [("Quote", "#0D9488"), ("Channel", "#6366F1"),
-                   ("Master", "#F59E0B"), ("Orderlines", "#DB2777")]
+                   ("Master", "#F59E0B"), ("Preislogik", "#9333EA"),
+                   ("Orderlines", "#DB2777")]
 
 
 def _cal_legend_html():
