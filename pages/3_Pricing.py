@@ -480,7 +480,9 @@ with st.sidebar:
     pricelogic_file = st.file_uploader(
         "Preislogikdaten (CSV)", type=["csv"], key="up_pricelogic",
         help="Pro PZN: berechnete Preise, angewandte Logik, Preiskategorie. "
-             "Wird dem oben gewählten Snapshot-Datum zugeordnet (Daten sind oft vom Vortag).")
+             "Wird dem oben gewählten Snapshot-Datum zugeordnet (Daten sind oft vom Vortag). "
+             "Quelle (BigQuery): "
+             "`analytics-production-453513.productdata_hub.fact_pricing_matrix_snapshot`")
 
     # Vorschau
     if quote_file is not None:
