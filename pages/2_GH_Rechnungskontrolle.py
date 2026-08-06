@@ -428,6 +428,22 @@ def lade_pdfs_aus_drive(_drive, gh, jahr, monat):
     return out
 
 
+def liste_invoice_belege(_drive, gh, jahr, monat):
+    """Listet nur die Belegnummern, zu denen ein PDF in Drive liegt — keine Downloads."""
+    try:
+        folder_id = get_pdf_folder_id(_drive, gh, jahr, monat, anlegen=False)
+        if not folder_id:
+            return set()
+        out = set()
+        for n in _drive_dateinamen(_drive, folder_id):
+            m = re.search(r"INVOICE-(.+)\.pdf$", n, re.IGNORECASE)
+            if m:
+                out.add(m.group(1))
+        return out
+    except Exception:
+        return set()
+
+
 def lade_pdf_aus_drive(_drive, gh, jahr, monat, beleg):
     """Lädt ein einzelnes Original-PDF (INVOICE-<beleg>.pdf) aus Drive. None falls fehlend."""
     from googleapiclient.http import MediaIoBaseDownload
@@ -1233,7 +1249,8 @@ _ns = f"{gh_auswahl}_{jahr_auswahl}_{monat_auswahl:02d}"
 roh_key    = f"gh_roh_{_ns}"      # Rohzeilen pro Beleg
 totals_key = f"gh_totals_{_ns}"   # PDF-Summen pro Beleg
 agg_key    = f"gh_agg_{_ns}"      # aggregierte Monatstabelle
-pdf_key    = f"gh_pdfs_{_ns}"     # Original-PDF-Bytes pro Beleg
+pdf_key    = f"gh_pdfs_{_ns}"     # Original-PDF-Bytes pro Beleg (nur Fallback ohne Drive)
+pdfbelege_key = f"gh_pdfbelege_{_ns}"  # Belegnummern mit PDF in Drive (nur Namen, keine Bytes)
 abr_key    = f"gh_abr_{_ns}"      # Rechnungsnr → {datum, betrag} laut Abrechnung
 abrpdf_key = f"gh_abrpdfs_{_ns}"  # Abrechnungs-PDFs (dateiname → bytes)
 report_key = f"gh_report_{_ns}"   # persistenter Report-Wert
@@ -1250,6 +1267,8 @@ if report_key not in st.session_state:
     st.session_state[report_key] = ""
 if excl_key not in st.session_state:
     st.session_state[excl_key] = set()
+if pdfbelege_key not in st.session_state:
+    st.session_state[pdfbelege_key] = set()
 
 
 def _report_sichern():
@@ -1281,6 +1300,10 @@ if drive and st.session_state[roh_key] is None and not st.session_state.get(load
         # on-demand aus Drive geholt. Spart das massenhafte Herunterladen aller PDFs
         # beim Monatswechsel (Hauptursache für langes Laden).
         st.session_state[pdf_key]    = {}
+        # Nur die Belegnummern der in Drive liegenden PDFs listen (keine Bytes)
+        st.session_state[pdfbelege_key] = liste_invoice_belege(
+            drive, gh_auswahl, int(jahr_auswahl), monat_auswahl
+        )
         # Abrechnungs-PDFs sind nur wenige → weiterhin direkt laden (für Download-Bereich)
         st.session_state[abrpdf_key] = lade_abr_pdfs_aus_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl)
     st.session_state[load_flag] = True
@@ -1340,12 +1363,27 @@ elif verarbeiten and uploads:
         totals_alt = st.session_state[totals_key] or {}
         totals_alt.update(totals_neu)
 
-        pdfs_alt = st.session_state[pdf_key] or {}
-        pdfs_alt.update(pdfs_neu)
-
         st.session_state[roh_key]    = df_gesamt
         st.session_state[totals_key] = totals_alt
-        st.session_state[pdf_key]    = pdfs_alt
+
+        # PDFs sofort nach Drive sichern statt Bytes im Speicher zu halten
+        _pdf_upload_ok = False
+        if drive and pdfs_neu:
+            try:
+                with st.spinner(f"Sichere {len(pdfs_neu)} PDF(s) in Drive …"):
+                    speichere_pdfs_in_drive(drive, gh_auswahl, pdfs_neu,
+                                            int(jahr_auswahl), monat_auswahl)
+                st.session_state[pdfbelege_key] = (
+                    set(st.session_state.get(pdfbelege_key) or set()) | set(pdfs_neu.keys())
+                )
+                _pdf_upload_ok = True
+            except Exception as e:
+                msgs.append(("warning", f"PDF-Upload nach Drive fehlgeschlagen — Bytes bleiben in der Sitzung: {e}"))
+        if not _pdf_upload_ok and pdfs_neu:
+            # Fallback (kein Drive / Upload-Fehler): wie bisher im Session State halten
+            pdfs_alt = st.session_state[pdf_key] or {}
+            pdfs_alt.update(pdfs_neu)
+            st.session_state[pdf_key] = pdfs_alt
 
         msgs.append(("success", f"{len(totals_neu)} Beleg(e) eingelesen."))
         for f in fehler:
@@ -1375,7 +1413,10 @@ else:
 abr    = st.session_state.get(abr_key) or {}
 
 # Alle bekannten Belege (inkl. solcher ohne erkannte Positionen)
-belege_alle = sorted(set(df_roh["Beleg"].unique()) | set(totals.keys()) | set(pdfs.keys()))
+belege_alle = sorted(
+    set(df_roh["Beleg"].unique()) | set(totals.keys()) | set(pdfs.keys())
+    | set(st.session_state.get(pdfbelege_key) or set())
+)
 
 if not belege_alle and not abr:
     st.markdown("""
@@ -1411,8 +1452,15 @@ else:
             snapshot=st.session_state.get(snap_key) or {},
             ausgeschlossen=sorted(st.session_state.get(excl_key) or set()),
         )
+        # Fallback-Bytes (falls Sofort-Upload beim Einlesen fehlschlug) jetzt hochladen
+        # und danach aus dem Speicher entfernen
         pdfs_session = st.session_state.get(pdf_key) or {}
         n_neu  = speichere_pdfs_in_drive(drive, gh_auswahl, pdfs_session, int(jahr_auswahl), monat_auswahl)
+        if pdfs_session:
+            st.session_state[pdfbelege_key] = (
+                set(st.session_state.get(pdfbelege_key) or set()) | set(pdfs_session.keys())
+            )
+            st.session_state[pdf_key] = {}
         n_neu += speichere_abr_pdfs_in_drive(drive, gh_auswahl, abrpdf_session, int(jahr_auswahl), monat_auswahl)
         return n_neu
 
@@ -1496,6 +1544,7 @@ else:
                 belege_vorhanden |= set(_df_roh["Beleg"].astype(str))
             belege_vorhanden |= {str(b) for b in (st.session_state.get(totals_key) or {})}
             belege_vorhanden |= {str(b) for b in (st.session_state.get(pdf_key) or {})}
+            belege_vorhanden |= {str(b) for b in (st.session_state.get(pdfbelege_key) or set())}
 
             df_abr = pd.DataFrame(
                 [{"Lieferdatum": _abr_norm(v)[0],
@@ -1745,17 +1794,20 @@ else:
                     st.success(f"Beleg {beleg} aktualisiert", icon=":material/check_circle:")
                     st.rerun()
 
-                # Zugehöriges Original-PDF anzeigen
+                # Zugehöriges Original-PDF anzeigen — Ein-Beleg-Cache statt Ansammlung im RAM
                 st.markdown("##### Zugehörige Rechnung (PDF)")
                 pdfs = st.session_state.get(pdf_key) or {}
                 pdf_bytes = pdfs.get(beleg)
+                _cache = st.session_state.get("_gh_pdf_cache")
+                if pdf_bytes is None and _cache and _cache[0] == (_ns, beleg):
+                    pdf_bytes = _cache[1]
                 # Bei Bedarf direkt aus Drive nachladen (z. B. nach erneutem Öffnen des Monats)
                 if pdf_bytes is None and drive:
                     with st.spinner("Lade PDF aus Drive …"):
                         pdf_bytes = lade_pdf_aus_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl, beleg)
                     if pdf_bytes is not None:
-                        pdfs[beleg] = pdf_bytes
-                        st.session_state[pdf_key] = pdfs
+                        # nur das aktuell angezeigte PDF vorhalten (verdrängt das vorherige)
+                        st.session_state["_gh_pdf_cache"] = ((_ns, beleg), pdf_bytes)
                 if pdf_bytes:
                     if pdf_viewer is not None:
                         pdf_viewer(
