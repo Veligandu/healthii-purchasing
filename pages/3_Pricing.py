@@ -2031,10 +2031,13 @@ with tab_zeit:
                 "Produkt": info["Produkt"].values,
                 m1n: info[mkey + "_1"].fillna(0).values,
                 m2n: info[mkey + "_2"].fillna(0).values,
-                "Ø VK Z1": info["VK_1"].values,
-                "Ø VK Z2": info["VK_2"].values,
             })
             disp[dmn] = ((disp[m2n] / disp[m1n].replace(0, pd.NA)) - 1) * 100
+            if mkey != "Umsatz":  # Umsatz zusätzlich zeigen (außer bereits die Sortierkennzahl)
+                disp["Umsatz Z1"] = info["Umsatz_1"].fillna(0).values
+                disp["Umsatz Z2"] = info["Umsatz_2"].fillna(0).values
+            disp["Ø VK Z1"] = info["VK_1"].values
+            disp["Ø VK Z2"] = info["VK_2"].values
             disp["Δ VK %"] = ((disp["Ø VK Z2"] / disp["Ø VK Z1"].replace(0, pd.NA)) - 1) * 100
             disp.insert(0, "Rang", range(1, len(disp) + 1))
 
@@ -2045,6 +2048,8 @@ with tab_zeit:
                     m1n: st.column_config.NumberColumn(format=mfmt),
                     m2n: st.column_config.NumberColumn(format=mfmt),
                     dmn: st.column_config.NumberColumn(format="%+.0f %%"),
+                    "Umsatz Z1": st.column_config.NumberColumn(format="%.2f €"),
+                    "Umsatz Z2": st.column_config.NumberColumn(format="%.2f €"),
                     "Ø VK Z1": st.column_config.NumberColumn(format="%.2f €"),
                     "Ø VK Z2": st.column_config.NumberColumn(format="%.2f €"),
                     "Δ VK %": st.column_config.NumberColumn(format="%+.1f %%"),
