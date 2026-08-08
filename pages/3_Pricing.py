@@ -2003,30 +2003,41 @@ with tab_zeit:
             else:
                 k3.metric("Summe CM2 Z2", "—")
 
-            # ── Rennerliste Z1 → Performance Z2 ──
-            top = s1.sort_values(mkey, ascending=False).head(topn).copy()
-            for c in ["Umsatz", "Absatz", "CM2", "VK"]:
-                top[c + "_2"] = top.index.map(s2[c])
-            top["Produkt"] = top.index.map(namen)
-
+            # ── Rennerliste (Basis-Zeitraum wählbar) → Performance im anderen Zeitraum ──
             mlabel = sort_metric
             m1n, m2n, dmn = f"{mlabel} Z1", f"{mlabel} Z2", f"Δ {mlabel} %"
             is_eur = mkey in ("Umsatz", "CM2")
+            mfmt = "%.2f €" if is_eur else "%d"
+
+            hc1, hc2 = st.columns([3, 1.6])
+            base_sel = hc2.radio("Basis-Zeitraum", ["Zeitraum 1", "Zeitraum 2"],
+                                 horizontal=True, key="zv_base", label_visibility="collapsed")
+            base_is_z1 = base_sel == "Zeitraum 1"
+            base = s1 if base_is_z1 else s2
+
+            top = base.sort_values(mkey, ascending=False).head(topn)
+            idx = top.index
+            info = pd.DataFrame(index=idx)
+            for c in ["Umsatz", "Absatz", "CM2", "VK"]:
+                info[c + "_1"] = idx.map(s1[c])
+                info[c + "_2"] = idx.map(s2[c])
+            info["Produkt"] = idx.map(namen)
+
+            hc1.markdown(f"##### Rennerliste {base_sel} (Top {len(info)} nach {mlabel}) → "
+                         f"{'Zeitraum 2' if base_is_z1 else 'Zeitraum 1'}")
 
             disp = pd.DataFrame({
-                "PZN": top.index,
-                "Produkt": top["Produkt"].values,
-                m1n: top[mkey].values,
-                m2n: top[mkey + "_2"].fillna(0).values,
-                "Ø VK Z1": top["VK"].values,
-                "Ø VK Z2": top["VK_2"].values,
+                "PZN": idx,
+                "Produkt": info["Produkt"].values,
+                m1n: info[mkey + "_1"].fillna(0).values,
+                m2n: info[mkey + "_2"].fillna(0).values,
+                "Ø VK Z1": info["VK_1"].values,
+                "Ø VK Z2": info["VK_2"].values,
             })
             disp[dmn] = ((disp[m2n] / disp[m1n].replace(0, pd.NA)) - 1) * 100
             disp["Δ VK %"] = ((disp["Ø VK Z2"] / disp["Ø VK Z1"].replace(0, pd.NA)) - 1) * 100
             disp.insert(0, "Rang", range(1, len(disp) + 1))
 
-            st.markdown(f"##### Rennerliste Zeitraum 1 (Top {len(disp)} nach {mlabel}) → Zeitraum 2")
-            mfmt = "%.2f €" if is_eur else "%d"
             st.dataframe(
                 disp, use_container_width=True, hide_index=True,
                 column_config={
@@ -2039,7 +2050,8 @@ with tab_zeit:
                     "Δ VK %": st.column_config.NumberColumn(format="%+.1f %%"),
                 },
             )
-            st.caption("Beste Produkte aus Zeitraum 1 und ihre Performance in Zeitraum 2. "
+            _other = "Zeitraum 2" if base_is_z1 else "Zeitraum 1"
+            st.caption(f"Beste Produkte aus {base_sel} und ihre Performance in {_other}. "
                        "Ø VK = durchschnittlicher Brutto-Verkaufspreis (Netto + MwSt) je Einheit. "
                        + ("Summe CM2 = Warenkorb-CM2 anteilig nach Netto-Umsatz je Produkt."
                           if mkey == "CM2" else ""))
@@ -2054,9 +2066,9 @@ with tab_zeit:
 
             # ── Stärkste negative Änderungen: Preiserhöhung + Performance-Rückgang ──
             st.markdown("##### Kandidaten für eine Rücknahme der Preiserhöhung")
-            rev = top[top["VK"].notna() & top["VK_2"].notna() & (top["VK"] > 0)].copy()
-            rev["dVK"] = (rev["VK_2"] / rev["VK"] - 1) * 100
-            rev["dM_abs"] = rev[mkey + "_2"].fillna(0) - rev[mkey]
+            rev = info[info["VK_1"].notna() & info["VK_2"].notna() & (info["VK_1"] > 0)].copy()
+            rev["dVK"] = (rev["VK_2"] / rev["VK_1"] - 1) * 100
+            rev["dM_abs"] = rev[mkey + "_2"].fillna(0) - rev[mkey + "_1"].fillna(0)
             rev = rev[(rev["dVK"] > 0) & (rev["dM_abs"] < 0)].sort_values("dM_abs")
 
             if rev.empty:
@@ -2066,10 +2078,10 @@ with tab_zeit:
                 rdisp = pd.DataFrame({
                     "PZN": rev.index,
                     "Produkt": rev["Produkt"].values,
-                    "Ø VK Z1": rev["VK"].values,
+                    "Ø VK Z1": rev["VK_1"].values,
                     "Ø VK Z2": rev["VK_2"].values,
                     "Δ VK %": rev["dVK"].values,
-                    m1n: rev[mkey].values,
+                    m1n: rev[mkey + "_1"].fillna(0).values,
                     m2n: rev[mkey + "_2"].fillna(0).values,
                 })
                 rdisp[dmn] = ((rdisp[m2n] / rdisp[m1n].replace(0, pd.NA)) - 1) * 100
