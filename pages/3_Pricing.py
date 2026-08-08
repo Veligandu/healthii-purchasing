@@ -606,16 +606,18 @@ if _panel:
             render_pricing_settings(drive, cfg)
     st.stop()  # bei offenem Panel keine Tabs rendern (Panel ersetzt die Ansicht)
 
-tab_snap, tab_cmp, tab_master, tab_renner, tab_produkt = st.tabs(
-    [":material/bar_chart: Momentaufnahme", ":material/compare_arrows: Vergleich", ":material/folder_open: Masterdatei-Analyse", ":material/leaderboard: Rennerliste", ":material/search: Produktansicht"]
+tab_snap, tab_cmp, tab_master, tab_renner, tab_produkt, tab_zeit = st.tabs(
+    [":material/bar_chart: Momentaufnahme", ":material/compare_arrows: Vergleich", ":material/folder_open: Masterdatei-Analyse", ":material/leaderboard: Rennerliste", ":material/search: Produktansicht", ":material/date_range: Zeitraumvergleich"]
 )
 
-# Orderlines einmal vorbereiten (von Vergleich, Rennerliste genutzt)
+# Orderlines einmal vorbereiten (von Vergleich, Rennerliste, Zeitraumvergleich genutzt)
 ol = load_orderlines(drive)
 if not ol.empty:
     ol = ol.copy()
     ol["ref"] = ol["source"].map(lambda s: ref_for_source(s, source_map))
     ol = ol[ol["d"].notna()]
+    ol["_brutto"] = ol["net"] + (pd.to_numeric(ol["tax"], errors="coerce").fillna(0.0)
+                                 if "tax" in ol.columns else 0.0)
     namen = ol.groupby("productId")["productname"].first()
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -1894,3 +1896,195 @@ def render_produktansicht():
 
 with tab_produkt:
     render_produktansicht()
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# TAB 6 – Zeitraumvergleich (Rennerliste Z1 → Performance in Z2, Preisänderungen)
+# ════════════════════════════════════════════════════════════════════════════════
+with tab_zeit:
+    if ol.empty:
+        st.info("Noch keine Orderlines vorhanden. Bitte links in der Seitenleiste hochladen.")
+    else:
+        dmin, dmax = ol["d"].min().date(), ol["d"].max().date()
+        # Defaults: Z1 = ältere 30 Tage („vorher"), Z2 = jüngste 30 Tage („nachher")
+        def_z2_bis = dmax
+        def_z2_von = max(dmin, (ol["d"].max() - pd.Timedelta(days=29)).date())
+        def_z1_bis = max(dmin, (ol["d"].max() - pd.Timedelta(days=30)).date())
+        def_z1_von = max(dmin, (ol["d"].max() - pd.Timedelta(days=59)).date())
+
+        zc1, zc2 = st.columns(2)
+        with zc1:
+            st.markdown("**Zeitraum 1 – Basis („vorher“)**")
+            z1a, z1b_ = st.columns(2)
+            z1v = z1a.date_input("Von", value=def_z1_von, min_value=dmin, max_value=dmax,
+                                 format="DD.MM.YYYY", key="zv_z1_von")
+            z1b = z1b_.date_input("Bis", value=def_z1_bis, min_value=dmin, max_value=dmax,
+                                  format="DD.MM.YYYY", key="zv_z1_bis")
+        with zc2:
+            st.markdown("**Zeitraum 2 – Vergleich („nachher“)**")
+            z2a, z2b_ = st.columns(2)
+            z2v = z2a.date_input("Von", value=def_z2_von, min_value=dmin, max_value=dmax,
+                                 format="DD.MM.YYYY", key="zv_z2_von")
+            z2b = z2b_.date_input("Bis", value=def_z2_bis, min_value=dmin, max_value=dmax,
+                                  format="DD.MM.YYYY", key="zv_z2_bis")
+
+        o1, o2, o3 = st.columns([1.2, 1, 1])
+        _mask1 = (ol["d"] >= pd.Timestamp(z1v)) & (ol["d"] <= pd.Timestamp(z1b))
+        _mask2 = (ol["d"] >= pd.Timestamp(z2v)) & (ol["d"] <= pd.Timestamp(z2b))
+        present_refs = [r for r in (CHANNEL_COLS + [REF_QUOTE]) if r in set(ol[_mask1 | _mask2]["ref"])]
+        label_to_ref = {ref_label(r, cfg): r for r in present_refs}
+        ch = o1.selectbox("Channel", ["Alle Channels"] + list(label_to_ref.keys()), key="zv_ch")
+        sort_metric = o2.selectbox("Sortiert nach", ["Umsatz", "Absatz", "Summe CM2"], key="zv_sort")
+        topn = o3.slider("Top N", 10, 200, 50, step=10, key="zv_n")
+
+        def _slice_ch(df):
+            return df if ch == "Alle Channels" else df[df["ref"] == label_to_ref[ch]]
+
+        d1 = _slice_ch(ol[_mask1])
+        d2 = _slice_ch(ol[_mask2])
+
+        if d1.empty:
+            st.warning("Keine Orderlines in Zeitraum 1 (mit dieser Channel-Auswahl).")
+        else:
+            def _cm2_by_product(df):
+                """Warenkorb-CM2 anteilig (nach Netto-Umsatz) auf die Produkte verteilt."""
+                if "order_id" not in df.columns or not df["order_id"].notna().any():
+                    return pd.Series(dtype=float)
+                d = df[df["order_id"].notna()].copy()
+                cm2_o = pl.basket_cm2(d)
+                bnet = d.groupby("order_id")["net"].transform("sum")
+                d["_c"] = d["order_id"].map(cm2_o) * (d["net"] / bnet.replace(0, pd.NA))
+                return d.groupby("productId")["_c"].sum()
+
+            def _total_cm2(df):
+                if "order_id" not in df.columns or not df["order_id"].notna().any():
+                    return float("nan")
+                return float(pl.basket_cm2(df[df["order_id"].notna()]).sum())
+
+            def _stats(df):
+                g = df.groupby("productId").agg(
+                    Umsatz=("net", "sum"), Absatz=("quantity", "sum"),
+                    _brutto=("_brutto", "sum"))
+                g["VK"] = g["_brutto"] / g["Absatz"].replace(0, pd.NA)
+                return g
+
+            s1, s2 = _stats(d1), _stats(d2)
+            s1["CM2"] = s1.index.map(_cm2_by_product(d1))
+            s2["CM2"] = s2.index.map(_cm2_by_product(d2))
+
+            cm2_ok = s1["CM2"].notna().any()
+            mkey = {"Umsatz": "Umsatz", "Absatz": "Absatz", "Summe CM2": "CM2"}[sort_metric]
+            if mkey == "CM2" and not cm2_ok:
+                st.info("Keine Bestellnummern in den Orderlines – Sortierung nach CM2 nicht "
+                        "möglich, es wird nach Umsatz sortiert.")
+                mkey, sort_metric = "Umsatz", "Umsatz"
+
+            # ── KPIs: Zeitraum 2 vs. Zeitraum 1 (gesamt) ──
+            days1 = (z1b - z1v).days + 1
+            days2 = (z2b - z2v).days + 1
+            st.caption(f"Zeitraum 1: {z1v:%d.%m.%Y} – {z1b:%d.%m.%Y} ({days1} Tage, "
+                       f"{len(d1):,} Orderlines) · Zeitraum 2: {z2v:%d.%m.%Y} – {z2b:%d.%m.%Y} "
+                       f"({days2} Tage, {len(d2):,} Orderlines)".replace(",", "."))
+            u1, u2 = float(d1["net"].sum()), float(d2["net"].sum())
+            a1, a2 = float(d1["quantity"].sum()), float(d2["quantity"].sum())
+            c1t, c2t = _total_cm2(d1), _total_cm2(d2)
+
+            def _eur(x):
+                return f"{x:,.0f} €".replace(",", ".")
+
+            def _int(x):
+                return f"{int(x):,}".replace(",", ".")
+
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Umsatz Z2", _eur(u2), delta=_eur(u2 - u1))
+            k2.metric("Absatz Z2", _int(a2), delta=_int(a2 - a1) if a1 else None)
+            if cm2_ok and pd.notna(c1t) and pd.notna(c2t):
+                k3.metric("Summe CM2 Z2", _eur(c2t), delta=_eur(c2t - c1t))
+            else:
+                k3.metric("Summe CM2 Z2", "—")
+
+            # ── Rennerliste Z1 → Performance Z2 ──
+            top = s1.sort_values(mkey, ascending=False).head(topn).copy()
+            for c in ["Umsatz", "Absatz", "CM2", "VK"]:
+                top[c + "_2"] = top.index.map(s2[c])
+            top["Produkt"] = top.index.map(namen)
+
+            mlabel = sort_metric
+            m1n, m2n, dmn = f"{mlabel} Z1", f"{mlabel} Z2", f"Δ {mlabel} %"
+            is_eur = mkey in ("Umsatz", "CM2")
+
+            disp = pd.DataFrame({
+                "PZN": top.index,
+                "Produkt": top["Produkt"].values,
+                m1n: top[mkey].values,
+                m2n: top[mkey + "_2"].fillna(0).values,
+                "Ø VK Z1": top["VK"].values,
+                "Ø VK Z2": top["VK_2"].values,
+            })
+            disp[dmn] = ((disp[m2n] / disp[m1n].replace(0, pd.NA)) - 1) * 100
+            disp["Δ VK %"] = ((disp["Ø VK Z2"] / disp["Ø VK Z1"].replace(0, pd.NA)) - 1) * 100
+            disp.insert(0, "Rang", range(1, len(disp) + 1))
+
+            st.markdown(f"##### Rennerliste Zeitraum 1 (Top {len(disp)} nach {mlabel}) → Zeitraum 2")
+            mfmt = "%.2f €" if is_eur else "%d"
+            st.dataframe(
+                disp, use_container_width=True, hide_index=True,
+                column_config={
+                    "Rang": st.column_config.NumberColumn(format="%d"),
+                    m1n: st.column_config.NumberColumn(format=mfmt),
+                    m2n: st.column_config.NumberColumn(format=mfmt),
+                    dmn: st.column_config.NumberColumn(format="%+.0f %%"),
+                    "Ø VK Z1": st.column_config.NumberColumn(format="%.2f €"),
+                    "Ø VK Z2": st.column_config.NumberColumn(format="%.2f €"),
+                    "Δ VK %": st.column_config.NumberColumn(format="%+.1f %%"),
+                },
+            )
+            st.caption("Beste Produkte aus Zeitraum 1 und ihre Performance in Zeitraum 2. "
+                       "Ø VK = durchschnittlicher Brutto-Verkaufspreis (Netto + MwSt) je Einheit. "
+                       + ("Summe CM2 = Warenkorb-CM2 anteilig nach Netto-Umsatz je Produkt."
+                          if mkey == "CM2" else ""))
+
+            buf = io.BytesIO()
+            with pd.ExcelWriter(buf, engine="openpyxl") as w:
+                disp.to_excel(w, index=False, sheet_name="Zeitraumvergleich")
+            st.download_button(
+                ":material/download: Als Excel", data=buf.getvalue(),
+                file_name="zeitraumvergleich.xlsx", key="zv_dl",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+            # ── Stärkste negative Änderungen: Preiserhöhung + Performance-Rückgang ──
+            st.markdown("##### Kandidaten für eine Rücknahme der Preiserhöhung")
+            rev = top[top["VK"].notna() & top["VK_2"].notna() & (top["VK"] > 0)].copy()
+            rev["dVK"] = (rev["VK_2"] / rev["VK"] - 1) * 100
+            rev["dM_abs"] = rev[mkey + "_2"].fillna(0) - rev[mkey]
+            rev = rev[(rev["dVK"] > 0) & (rev["dM_abs"] < 0)].sort_values("dM_abs")
+
+            if rev.empty:
+                st.caption(f"Keine Produkte mit gestiegenem Ø VK und gleichzeitigem "
+                           f"{mlabel}-Rückgang gefunden.")
+            else:
+                rdisp = pd.DataFrame({
+                    "PZN": rev.index,
+                    "Produkt": rev["Produkt"].values,
+                    "Ø VK Z1": rev["VK"].values,
+                    "Ø VK Z2": rev["VK_2"].values,
+                    "Δ VK %": rev["dVK"].values,
+                    m1n: rev[mkey].values,
+                    m2n: rev[mkey + "_2"].fillna(0).values,
+                })
+                rdisp[dmn] = ((rdisp[m2n] / rdisp[m1n].replace(0, pd.NA)) - 1) * 100
+                st.dataframe(
+                    rdisp.head(20), use_container_width=True, hide_index=True,
+                    column_config={
+                        "Ø VK Z1": st.column_config.NumberColumn(format="%.2f €"),
+                        "Ø VK Z2": st.column_config.NumberColumn(format="%.2f €"),
+                        "Δ VK %": st.column_config.NumberColumn(format="%+.1f %%"),
+                        m1n: st.column_config.NumberColumn(format=mfmt),
+                        m2n: st.column_config.NumberColumn(format=mfmt),
+                        dmn: st.column_config.NumberColumn(format="%+.0f %%"),
+                    },
+                )
+                st.caption(f"Produkte aus der Rennerliste, deren Ø VK von Z1 zu Z2 **gestiegen** "
+                           f"ist und deren {mlabel} zugleich **gesunken** ist – sortiert nach "
+                           f"größtem absoluten {mlabel}-Rückgang. Heuristik: Rückgänge können auch "
+                           f"andere Ursachen haben (Saisonalität, Verfügbarkeit, Wettbewerb).")
