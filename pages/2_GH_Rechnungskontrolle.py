@@ -1783,16 +1783,45 @@ else:
                         st.warning(f"Nach Korrektur weiterhin {neue_diff:+.2f} € Differenz "
                                    f"({neuer_wert:,.2f} € berechnet vs. {beleg_wert:,.2f} € laut Beleg).")
 
-                if st.button(":material/save: Korrekturen übernehmen", key=f"save_{beleg}",
-                             type="primary", disabled=gesperrt):
-                    edited = edited[edited["PZN"].notna() & (edited["PZN"].astype(str) != "")]
-                    edited["Beleg"] = beleg
-                    edited["Jahr"]  = df_b["Jahr"].iloc[0]  if not df_b.empty else int(jahr_auswahl)
-                    edited["Monat"] = df_b["Monat"].iloc[0] if not df_b.empty else monat_auswahl
-                    df_rest = df_roh[df_roh["Beleg"] != beleg]
-                    st.session_state[roh_key] = pd.concat([df_rest, edited], ignore_index=True)
-                    st.success(f"Beleg {beleg} aktualisiert", icon=":material/check_circle:")
-                    st.rerun()
+                _c_save, _c_rescrape = st.columns(2)
+                with _c_save:
+                    if st.button(":material/save: Korrekturen übernehmen", key=f"save_{beleg}",
+                                 type="primary", use_container_width=True, disabled=gesperrt):
+                        edited = edited[edited["PZN"].notna() & (edited["PZN"].astype(str) != "")]
+                        edited["Beleg"] = beleg
+                        edited["Jahr"]  = df_b["Jahr"].iloc[0]  if not df_b.empty else int(jahr_auswahl)
+                        edited["Monat"] = df_b["Monat"].iloc[0] if not df_b.empty else monat_auswahl
+                        df_rest = df_roh[df_roh["Beleg"] != beleg]
+                        st.session_state[roh_key] = pd.concat([df_rest, edited], ignore_index=True)
+                        st.success(f"Beleg {beleg} aktualisiert", icon=":material/check_circle:")
+                        st.rerun()
+                with _c_rescrape:
+                    if st.button(":material/refresh: Beleg neu aus PDF einlesen",
+                                 key=f"rescrape_{beleg}", use_container_width=True, disabled=gesperrt,
+                                 help="Löscht alle Positionen dieses Belegs und liest sie frisch aus dem PDF ein (behebt doppelt eingelesene Zeilen). Manuelle Korrekturen gehen dabei verloren."):
+                        _parser = PARSER.get(gh_auswahl, {}).get("sammel")
+                        _pdfb = (st.session_state.get(pdf_key) or {}).get(beleg)
+                        if _pdfb is None and drive:
+                            _pdfb = lade_pdf_aus_drive(drive, gh_auswahl, int(jahr_auswahl), monat_auswahl, beleg)
+                        if _parser is None:
+                            st.error(f"Für {gh_auswahl} ist kein Sammelrechnungs-Parser hinterlegt.")
+                        elif _pdfb is None:
+                            st.error("Kein PDF zu diesem Beleg gefunden (weder in der Sitzung noch in Drive).")
+                        else:
+                            try:
+                                _dfnew, _ = _parser(_pdfb, f"INVOICE-{beleg}.pdf")
+                                if _dfnew is None or _dfnew.empty:
+                                    st.warning("Aus dem PDF konnten keine Positionen gelesen werden.")
+                                else:
+                                    _dfnew = _dfnew.copy()
+                                    _dfnew["Beleg"] = beleg
+                                    df_rest = df_roh[df_roh["Beleg"] != beleg]
+                                    st.session_state[roh_key] = pd.concat([df_rest, _dfnew], ignore_index=True)
+                                    st.success(f"Beleg {beleg}: {len(_dfnew)} Positionen neu eingelesen.",
+                                               icon=":material/check_circle:")
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"Neu-Einlesen fehlgeschlagen: {e}")
 
                 # Zugehöriges Original-PDF anzeigen — Ein-Beleg-Cache statt Ansammlung im RAM
                 st.markdown("##### Zugehörige Rechnung (PDF)")
