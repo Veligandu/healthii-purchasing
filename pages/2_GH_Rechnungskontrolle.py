@@ -631,15 +631,19 @@ def beleg_aus_dateiname(name: str) -> str:
     return m.group(1) if m else name
 
 
+_PHOENIX_NR_RE = re.compile(r"NR\.\:\s*(\d+)")
+
 def parse_phoenix_sammel(datei_bytes: bytes, dateiname: str) -> tuple[pd.DataFrame, float | None]:
     """Phoenix-Sammelrechnung. Gibt (DataFrame mit Positionen, Rechnungssumme) zurück."""
     jahr, monat, _ = datum_aus_dateiname(dateiname)
     beleg = beleg_aus_dateiname(dateiname)
     zeilen = []
     total_pdf = None
+    voller_text = []
     with pdfplumber.open(io.BytesIO(datei_bytes)) as pdf:
         for seite in pdf.pages:
             text = seite.extract_text() or ""
+            voller_text.append(text)
             for m in _ZEILEN_RE.finditer(text):
                 zeilen.append({
                     "PZN":          m.group(2),
@@ -653,6 +657,12 @@ def parse_phoenix_sammel(datei_bytes: bytes, dateiname: str) -> tuple[pd.DataFra
             m_total = _TOTAL_RE.search(text)
             if m_total:
                 total_pdf = _preis(m_total.group(1))
+    # Belegnummer bevorzugt aus dem PDF-Inhalt ("NR.: …") — robust gegenüber Dateinamen
+    m_nr = _PHOENIX_NR_RE.search("\n".join(voller_text))
+    if m_nr:
+        beleg = m_nr.group(1)
+        for z in zeilen:
+            z["Beleg"] = beleg
     return pd.DataFrame(zeilen), total_pdf
 
 # ─── Preis-CSV-Parser ─────────────────────────────────────────────────────────
