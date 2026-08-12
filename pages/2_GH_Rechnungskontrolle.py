@@ -1659,8 +1659,22 @@ else:
                                                     if str(k) not in _st}
                     st.session_state[pdf_key] = {k: v for k, v in (st.session_state.get(pdf_key) or {}).items()
                                                  if str(k) not in _st}
+                    st.session_state[pdfbelege_key] = {b for b in (st.session_state.get(pdfbelege_key) or set())
+                                                       if str(b) not in _st}
                     st.session_state[excl_key] = {b for b in (st.session_state.get(excl_key) or set())
                                                   if str(b) not in _st}
+                    # zugehörige Alt-PDFs auch in Drive löschen, sonst kommen sie beim Laden zurück
+                    if drive:
+                        try:
+                            _folder = get_pdf_folder_id(drive, gh_auswahl, int(jahr_auswahl),
+                                                        monat_auswahl, anlegen=False)
+                            if _folder:
+                                for _b in _st:
+                                    for _f in _drive_finde(drive, _folder, f"INVOICE-{_b}.pdf"):
+                                        drive.files().update(fileId=_f["id"],
+                                                             body={"trashed": True}).execute()
+                        except Exception:
+                            pass
                     st.success(f"{len(_stale)} ungültige Beleg(e) entfernt. Nicht vergessen zu speichern.",
                                icon=":material/check_circle:")
                     st.rerun()
