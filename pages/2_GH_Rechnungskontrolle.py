@@ -1642,6 +1642,29 @@ else:
         if belege_alle:
             st.subheader(f"Belegkontrolle {monat_label}")
 
+            # Altlasten aus früheren Einlese-Läufen: Belege mit nicht-numerischem
+            # Schlüssel (z. B. Dateiname "507941.pdf") — meist Duplikate des sauberen,
+            # rein numerischen Belegs. Zum Entfernen anbieten.
+            _stale = [b for b in belege_alle if not str(b).isdigit()]
+            if _stale and not gesperrt:
+                st.warning(f"{len(_stale)} Beleg(e) mit ungültigem Schlüssel gefunden "
+                           f"(Dateiname-Reste, z. B. „{_stale[0]}“). Diese sind meist Duplikate.")
+                if st.button(":material/mop: Ungültige Belege entfernen",
+                             key=f"cleanup_stale_{_ns}"):
+                    _st = set(map(str, _stale))
+                    _dfr = st.session_state.get(roh_key)
+                    if _dfr is not None and not _dfr.empty:
+                        st.session_state[roh_key] = _dfr[~_dfr["Beleg"].astype(str).isin(_st)]
+                    st.session_state[totals_key] = {k: v for k, v in (st.session_state.get(totals_key) or {}).items()
+                                                    if str(k) not in _st}
+                    st.session_state[pdf_key] = {k: v for k, v in (st.session_state.get(pdf_key) or {}).items()
+                                                 if str(k) not in _st}
+                    st.session_state[excl_key] = {b for b in (st.session_state.get(excl_key) or set())
+                                                  if str(b) not in _st}
+                    st.success(f"{len(_stale)} ungültige Beleg(e) entfernt. Nicht vergessen zu speichern.",
+                               icon=":material/check_circle:")
+                    st.rerun()
+
             # Beleg-Übersicht aufbauen — auch Belege mit 0 Positionen
             df_belege = pd.DataFrame({"Beleg": belege_alle})
             if not df_roh.empty:
