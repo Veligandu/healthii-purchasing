@@ -1477,17 +1477,29 @@ with tab4:
                     _t.sleep(1)
             raise _last
 
-        def lade_purchase_order(_drive, file_id):
-            """Lädt eine Purchase-Order Excel aus Drive und gibt einen DataFrame zurück."""
+        @st.cache_data(ttl=300, max_entries=3, show_spinner=False)
+        def lade_purchase_order_bytes(_drive, file_id):
+            """Lädt eine Purchase-Order aus Drive als Bytes (mit Retry, gecacht)."""
             from googleapiclient.http import MediaIoBaseDownload
-            buf = io.BytesIO()
-            downloader = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=file_id))
-            done = False
-            while not done:
-                _, done = downloader.next_chunk()
-            buf.seek(0)
+            import time as _t
+            _last = None
+            for _versuch in range(3):
+                try:
+                    buf = io.BytesIO()
+                    downloader = MediaIoBaseDownload(buf, _drive.files().get_media(fileId=file_id))
+                    done = False
+                    while not done:
+                        _, done = downloader.next_chunk()
+                    return buf.getvalue()
+                except Exception as _e:
+                    _last = _e
+                    _t.sleep(1)
+            raise _last
+
+        def lade_purchase_order(raw_bytes):
+            """Parst die Purchase-Order-Bytes in einen DataFrame."""
             # Zeile 1 = Info-Banner überspringen, Zeile 2 = Header
-            df = pd.read_excel(buf, skiprows=1)
+            df = pd.read_excel(io.BytesIO(raw_bytes), skiprows=1)
             # Summenzeilen herausfiltern (PZN leer oder kein gültiger Wert)
             if "PZN" in df.columns:
                 df = df[df["PZN"].notna() & (df["PZN"].astype(str).str.strip() != "")]
@@ -1514,9 +1526,17 @@ with tab4:
             )
 
             if ausgewählt:
-                with st.spinner("Lade …"):
-                    df_archiv = lade_purchase_order(drive, datei_ids[ausgewählt])
+                try:
+                    with st.spinner("Lade …"):
+                        _po_bytes = lade_purchase_order_bytes(drive, datei_ids[ausgewählt])
+                        df_archiv = lade_purchase_order(_po_bytes)
+                except Exception as _e:
+                    st.warning(f"Purchase-Order konnte nicht geladen werden (Netzwerkfehler) — "
+                               f"bitte Seite neu laden. — {_e}")
+                    df_archiv = None
+                    _po_bytes = None
 
+            if ausgewählt and df_archiv is not None:
                 # KPIs
                 if not df_archiv.empty and "Bestellwert (€)" in df_archiv.columns:
                     c1, c2, c3 = st.columns(3)
@@ -1531,16 +1551,10 @@ with tab4:
                     hide_index=True,
                 )
 
-                # Download-Button
-                from googleapiclient.http import MediaIoBaseDownload
-                buf_dl = io.BytesIO()
-                dl = MediaIoBaseDownload(buf_dl, drive.files().get_media(fileId=datei_ids[ausgewählt]))
-                done = False
-                while not done:
-                    _, done = dl.next_chunk()
+                # Download-Button — nutzt die bereits geladenen Bytes (kein zweiter Download)
                 st.download_button(
                     label=":material/download: Excel herunterladen",
-                    data=buf_dl.getvalue(),
+                    data=_po_bytes,
                     file_name=ausgewählt,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
