@@ -625,10 +625,12 @@ if not ol.empty:
 # ════════════════════════════════════════════════════════════════════════════════
 with tab_snap:
     snaps = list_snapshots(drive)
-    if not snaps:
-        st.info("Noch keine Daten vorhanden. Bitte links in der Seitenleiste Preise hochladen.")
+    # Eine Momentaufnahme existiert nur, wenn Quote- UND Channel-Preise vorliegen.
+    keys = [k for k, v in snaps.items() if v.get("quote_id") and v.get("channel_id")]
+    if not keys:
+        st.info("Noch keine Momentaufnahme mit Quote- und Channel-Preisen vorhanden. "
+                "Bitte links in der Seitenleiste beide Preisarten hochladen.")
     else:
-        keys = list(snaps.keys())
         sel = st.selectbox("Zeitpunkt", keys, index=len(keys) - 1,
                            format_func=fmt_date, key="snap_sel")
         full = load_snapshot(drive, sel)
