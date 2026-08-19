@@ -261,19 +261,27 @@ def lade_monat_aus_drive(_drive, gh, jahr, monat):
             buf = _drive_download(_drive, files[0]["id"])
             with zipfile.ZipFile(buf) as z:
                 namen = set(z.namelist())
-                df_roh = None
-                if "rohdaten.parquet" in namen:
-                    df_roh = pd.read_parquet(io.BytesIO(z.read("rohdaten.parquet")))
+
+                def _lies_tab(basename, **kw):
+                    # bevorzugt CSV (neu), sonst Parquet (alt)
+                    if basename + ".csv" in namen:
+                        return pd.read_csv(io.BytesIO(z.read(basename + ".csv")), **kw)
+                    if basename + ".parquet" in namen:
+                        return pd.read_parquet(io.BytesIO(z.read(basename + ".parquet")))
+                    return None
+
+                df_roh = _lies_tab("rohdaten", dtype={"PZN": str, "Beleg": str})
+                if df_roh is not None:
                     for c in ("PZN", "Beleg"):
                         if c in df_roh.columns:
                             df_roh[c] = df_roh[c].astype(str)
                 totals = {}
-                if "summen.parquet" in namen:
-                    dt = pd.read_parquet(io.BytesIO(z.read("summen.parquet")))
+                dt = _lies_tab("summen", dtype={"Beleg": str})
+                if dt is not None and not dt.empty:
                     totals = dict(zip(dt["Beleg"].astype(str), dt["Warenwert_Beleg"]))
                 abr = {}
-                if "abrechnung.parquet" in namen:
-                    da = pd.read_parquet(io.BytesIO(z.read("abrechnung.parquet")))
+                da = _lies_tab("abrechnung", dtype={"Rechnungsnr": str})
+                if da is not None and not da.empty:
                     for _, r in da.iterrows():
                         datum = r["Datum"]
                         datum = None if pd.isna(datum) else str(datum)[:10]
@@ -325,15 +333,23 @@ def speichere_monat_in_drive(_drive, gh, df_agg, df_roh, totals, abr, report,
         "report":         re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(report or "")),
         "snapshot":       {str(p): float(v) for p, v in (snapshot or {}).items()},
     }
+    # Rohdaten-Spaltentypen normalisieren (verhindert u. a. pyarrow-/CSV-Probleme)
+    if df_roh is not None:
+        df_roh = df_roh.copy()
+        for c in ("PZN", "Beleg"):
+            if c in df_roh.columns:
+                df_roh[c] = df_roh[c].astype(str)
+        for c in ("Menge", "EK_ohne_MWSt", "Warenwert", "Jahr", "Monat"):
+            if c in df_roh.columns:
+                df_roh[c] = pd.to_numeric(df_roh[c], errors="coerce")
+
+    # Monatsdaten als CSV im Zip (kein pyarrow → kein Segfault-Risiko)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         if df_roh is not None:
-            _b = io.BytesIO(); df_roh.to_parquet(_b, index=False)
-            z.writestr("rohdaten.parquet", _b.getvalue())
-        _b = io.BytesIO(); df_totals.to_parquet(_b, index=False)
-        z.writestr("summen.parquet", _b.getvalue())
-        _b = io.BytesIO(); df_abr.to_parquet(_b, index=False)
-        z.writestr("abrechnung.parquet", _b.getvalue())
+            z.writestr("rohdaten.csv", df_roh.to_csv(index=False))
+        z.writestr("summen.csv", df_totals.to_csv(index=False))
+        z.writestr("abrechnung.csv", df_abr.to_csv(index=False))
         z.writestr("meta.json", json.dumps(meta))
     _drive_upload(_drive, folder_id, base + ".zip", buf, "application/zip")
     # altes xlsx-Format aufräumen, damit es nicht doppelt erscheint

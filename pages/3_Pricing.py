@@ -922,10 +922,12 @@ with tab_snap:
 # ════════════════════════════════════════════════════════════════════════════════
 with tab_cmp:
     snaps = list_snapshots(drive)
-    if len(snaps) < 2:
-        st.info("Für einen Vergleich werden mindestens zwei gespeicherte Zeitpunkte benötigt.")
+    # Nur Zeitpunkte mit Quote- UND Channel-Preisen sind vergleichbar.
+    keys = [k for k, v in snaps.items() if v.get("quote_id") and v.get("channel_id")]
+    if len(keys) < 2:
+        st.info("Für einen Vergleich werden mindestens zwei Zeitpunkte mit Quote- und "
+                "Channel-Preisen benötigt.")
     else:
-        keys = list(snaps.keys())
         c1, c2, c3 = st.columns([1, 1, 1])
         with c1:
             von = st.selectbox("Von", keys, index=len(keys) - 2, format_func=fmt_date, key="cmp_von")
